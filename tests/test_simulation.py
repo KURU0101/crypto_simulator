@@ -29,19 +29,21 @@ def test_load_comparison_config() -> None:
     config_path = Path("config/comparison.example.json")
     cases = load_config(config_path)
 
-    assert len(cases) == 2
-    assert cases[0]["name"] == "baseline_threshold"
-    assert cases[0]["entry_threshold"] == 0.01
-    assert cases[1]["name"] == "aggressive_threshold"
-    assert cases[1]["exit_threshold"] == -0.005
+    assert len(cases) == 5
+    assert cases[0]["name"] == "aggressive_threshold"
+    assert cases[0]["entry_threshold"] == 0.003
+    assert cases[2]["name"] == "baseline_threshold"
+    assert cases[3]["name"] == "conservative_threshold"
+    assert cases[4]["name"] == "no_trade_threshold"
+    assert cases[4]["entry_threshold"] == 0.03
 
 
 def test_load_comparison_cases_accepts_root_list_config() -> None:
     cases = load_comparison_cases("config/comparison.example.json")
 
-    assert len(cases) == 2
-    assert cases[0]["name"] == "baseline_threshold"
-    assert cases[1]["name"] == "aggressive_threshold"
+    assert len(cases) == 5
+    assert cases[0]["name"] == "aggressive_threshold"
+    assert cases[-1]["name"] == "no_trade_threshold"
 
 
 def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> None:
@@ -827,6 +829,7 @@ def test_summarize_case_result_matches_simulation_summary_fields() -> None:
         "periods_in_position": 1,
         "winning_trades": 1,
         "losing_trades": 0,
+        "win_rate": 1.0,
         "realized_pnl_total": 100.0,
         "average_holding_period": 1.0,
     }
@@ -867,6 +870,7 @@ def test_run_comparisons_returns_one_summary_per_case() -> None:
             "periods_in_position": 1,
             "winning_trades": 0,
             "losing_trades": 0,
+            "win_rate": 0.0,
             "realized_pnl_total": 0,
             "average_holding_period": 0.0,
         },
@@ -877,6 +881,7 @@ def test_run_comparisons_returns_one_summary_per_case() -> None:
             "periods_in_position": 1,
             "winning_trades": 0,
             "losing_trades": 0,
+            "win_rate": 0.0,
             "realized_pnl_total": 0,
             "average_holding_period": 0.0,
         },
@@ -974,6 +979,7 @@ def test_run_comparisons_handles_single_zero_summary_case() -> None:
             "periods_in_position": 0,
             "winning_trades": 0,
             "losing_trades": 0,
+            "win_rate": 0.0,
             "realized_pnl_total": 0,
             "average_holding_period": 0.0,
         }
@@ -983,52 +989,113 @@ def test_run_comparisons_handles_single_zero_summary_case() -> None:
 def test_run_comparisons_supports_threshold_cases_with_different_results() -> None:
     cases = [
         {
-            "name": "baseline_threshold",
-            "simulation_name": "baseline_threshold",
-            "initial_cash": 1000,
-            "fee_rate": 0.0,
-            "slippage_rate": 0.0,
-            "returns": [0.01, -0.02, 0.007, -0.006, 0.012, -0.011],
-            "entry_threshold": 0.01,
-            "exit_threshold": -0.01,
-        },
-        {
             "name": "aggressive_threshold",
             "simulation_name": "aggressive_threshold",
             "initial_cash": 1000,
             "fee_rate": 0.0,
             "slippage_rate": 0.0,
-            "returns": [0.01, -0.02, 0.007, -0.006, 0.012, -0.011],
+            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
+            "entry_threshold": 0.003,
+            "exit_threshold": -0.003,
+        },
+        {
+            "name": "moderate_threshold",
+            "simulation_name": "moderate_threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
             "entry_threshold": 0.005,
             "exit_threshold": -0.005,
+        },
+        {
+            "name": "baseline_threshold",
+            "simulation_name": "baseline_threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
+            "entry_threshold": 0.01,
+            "exit_threshold": -0.01,
+        },
+        {
+            "name": "conservative_threshold",
+            "simulation_name": "conservative_threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
+            "entry_threshold": 0.02,
+            "exit_threshold": -0.02,
+        },
+        {
+            "name": "no_trade_threshold",
+            "simulation_name": "no_trade_threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
+            "entry_threshold": 0.03,
+            "exit_threshold": -0.03,
         },
     ]
 
     comparisons = run_comparisons(cases)
 
+    assert [comparison["name"] for comparison in comparisons] == [
+        "aggressive_threshold",
+        "moderate_threshold",
+        "baseline_threshold",
+        "conservative_threshold",
+        "no_trade_threshold",
+    ]
+    assert [comparison["trade_count"] for comparison in comparisons] == [4, 3, 2, 1, 0]
+    assert [comparison["win_rate"] for comparison in comparisons] == [1.0, 1.0, 0.5, 1.0, 0.0]
+    assert [comparison["entry_threshold"] for comparison in comparisons] == [0.003, 0.005, 0.01, 0.02, 0.03]
+    assert [comparison["exit_threshold"] for comparison in comparisons] == [-0.003, -0.005, -0.01, -0.02, -0.03]
+    assert [comparison["final_value"] for comparison in comparisons] == pytest.approx(
+        [1043.609318048, 1039.4515119999999, 1019.8631205839999, 1020.9999999999999, 1000.0]
+    )
+    assert [comparison["realized_pnl_total"] for comparison in comparisons] == pytest.approx(
+        [43.60931804799998, 39.451511999999866, 19.863120583999902, 20.999999999999886, 0.0]
+    )
+    assert [comparison["average_holding_period"] for comparison in comparisons] == [1.0, 1.0, 2.0, 1.0, 0.0]
+    assert comparisons[0]["trade_count"] > comparisons[1]["trade_count"] > comparisons[2]["trade_count"]
+    assert comparisons[2]["win_rate"] < comparisons[0]["win_rate"]
+    assert comparisons[-1]["trade_count"] == 0
+
+
+def test_run_comparisons_allows_threshold_sensitivity_case_with_unclosed_trade() -> None:
+    comparisons = run_comparisons(
+        [
+            {
+                "name": "open_trade_threshold",
+                "simulation_name": "open_trade_threshold",
+                "initial_cash": 1000,
+                "fee_rate": 0.0,
+                "slippage_rate": 0.0,
+                "returns": [0.012, 0.001, 0.002],
+                "entry_threshold": 0.01,
+                "exit_threshold": -0.01,
+            }
+        ]
+    )
+
     assert comparisons == [
         {
-            "name": "baseline_threshold",
-            "final_value": 1022.12,
-            "trade_count": 2,
-            "periods_in_position": 2,
-            "winning_trades": 2,
-            "losing_trades": 0,
-            "realized_pnl_total": 22.120000000000005,
-            "average_holding_period": 1.0,
-        },
-        {
-            "name": "aggressive_threshold",
-            "final_value": 1029.27484,
-            "trade_count": 3,
+            "name": "open_trade_threshold",
+            "final_value": 1015.038024,
+            "trade_count": 1,
             "periods_in_position": 3,
-            "winning_trades": 3,
+            "winning_trades": 0,
             "losing_trades": 0,
-            "realized_pnl_total": 29.27484000000004,
-            "average_holding_period": 1.0,
-        },
+            "win_rate": 0.0,
+            "realized_pnl_total": 0,
+            "average_holding_period": 0.0,
+            "entry_threshold": 0.01,
+            "exit_threshold": -0.01,
+        }
     ]
-    assert comparisons[0]["final_value"] != comparisons[1]["final_value"]
 
 
 def test_format_comparison_results_returns_json_with_summary_fields() -> None:
@@ -1040,6 +1107,7 @@ def test_format_comparison_results_returns_json_with_summary_fields() -> None:
             "periods_in_position": 0,
             "winning_trades": 0,
             "losing_trades": 0,
+            "win_rate": 0.0,
             "realized_pnl_total": 0,
             "average_holding_period": 0.0,
         }
@@ -1049,6 +1117,7 @@ def test_format_comparison_results_returns_json_with_summary_fields() -> None:
 
     assert '"name": "baseline"' in formatted
     assert '"final_value": 1000.0' in formatted
+    assert '"win_rate": 0.0' in formatted
     assert '"average_holding_period": 0.0' in formatted
 
 
@@ -1076,6 +1145,40 @@ def test_load_comparison_cases_raises_when_cases_is_not_a_list(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="comparison config cases must be a list"):
         load_comparison_cases(str(config_path))
+
+
+def test_run_comparisons_raises_for_missing_threshold_pair() -> None:
+    with pytest.raises(
+        ValueError,
+        match="each comparison case must include entry_signals and exit_signals or entry_threshold and exit_threshold",
+    ):
+        run_comparisons(
+            [
+                {
+                    "name": "invalid_threshold_case",
+                    "simulation_name": "invalid_threshold_case",
+                    "initial_cash": 1000,
+                    "returns": [0.01],
+                    "entry_threshold": 0.01,
+                }
+            ]
+        )
+
+
+def test_run_comparisons_raises_for_invalid_threshold_type_case() -> None:
+    with pytest.raises(TypeError, match="entry_threshold must be a number"):
+        run_comparisons(
+            [
+                {
+                    "name": "invalid_threshold_type",
+                    "simulation_name": "invalid_threshold_type",
+                    "initial_cash": 1000,
+                    "returns": [0.01],
+                    "entry_threshold": "0.01",
+                    "exit_threshold": -0.01,
+                }
+            ]
+        )
 
 
 def test_comparison_main_handles_empty_cases_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

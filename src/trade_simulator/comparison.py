@@ -5,16 +5,28 @@ from trade_simulator.simulation import simulate
 
 
 def summarize_case_result(name: str, result: dict) -> dict:
-    return {
+    exited_trade_count = sum(1 for trade in result["trade_log"] if trade["exited"])
+    win_rate = 0.0
+    if exited_trade_count:
+        win_rate = result["winning_trades"] / exited_trade_count
+
+    summary = {
         "name": name,
         "final_value": result["final_value"],
         "trade_count": result["trade_count"],
         "periods_in_position": result["periods_in_position"],
         "winning_trades": result["winning_trades"],
         "losing_trades": result["losing_trades"],
+        "win_rate": win_rate,
         "realized_pnl_total": result["realized_pnl_total"],
         "average_holding_period": result["average_holding_period"],
     }
+
+    if "entry_threshold" in result and "exit_threshold" in result:
+        summary["entry_threshold"] = result["entry_threshold"]
+        summary["exit_threshold"] = result["exit_threshold"]
+
+    return summary
 
 
 def run_case(case: dict) -> dict:
