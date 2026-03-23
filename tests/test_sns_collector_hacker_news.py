@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.external_signal_test_helpers import assert_saved_summary_matches_observation, assert_summary_not_saved
 from trade_simulator.sns_adapters import (
     HACKER_NEWS_ITEM_URL_TEMPLATE,
     HACKER_NEWS_TOPSTORIES_URL,
@@ -150,8 +151,25 @@ def test_run_sns_collector_collects_hacker_news_records_and_saves_them(tmp_path:
     assert observation["score_summary"] == {"min": 0, "max": 120, "average": 70.0, "total": 210}
     assert observation["comment_count_summary"] == {"min": 0, "max": 45, "average": 19.0, "total": 57}
     assert observation["story_type_distribution"] == {"story": 2, "ask": 1}
-    assert Path(observation["saved_paths"]["normalized"]).exists()
-    assert Path(observation["saved_paths"]["summary"]).exists()
+    assert_saved_summary_matches_observation(observation)
+
+
+def test_run_sns_collector_skips_hacker_news_summary_file_when_disabled_boundary_case(tmp_path: Path) -> None:
+    config = hacker_news_test_config(tmp_path)
+    config["output"]["save_run_summary"] = False
+    payloads = {
+        HACKER_NEWS_TOPSTORIES_URL: json.dumps([1001]),
+        build_hacker_news_item_url(1001): json.dumps(HN_ITEM_BTC),
+    }
+
+    result = run_sns_collector(
+        config,
+        fetch_text_fn=lambda url, timeout_seconds: payloads[url],
+        now_fn=lambda: 1_774_000_000.0,
+    )
+
+    assert result["observation"]["status"] == "completed"
+    assert_summary_not_saved(result["observation"])
 
 
 def test_run_sns_collector_handles_hacker_news_list_fetch_failure(tmp_path: Path) -> None:

@@ -5,6 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.external_signal_test_helpers import (
+    assert_saved_summary_matches_observation,
+    assert_summary_not_saved,
+    load_saved_json,
+)
 from trade_simulator.news_adapters import build_news_dedup_key
 from trade_simulator.news_collector import (
     COINDESK_RSS_FEED_URL,
@@ -291,17 +296,14 @@ def test_run_news_collector_collects_coindesk_records_and_saves_them(tmp_path: P
     assert observation["category_distribution"] == {"markets": 1, "policy": 1}
     assert observation["source_distribution"] == {"coindesk": 2}
     assert observation["source_specific"] == {"feed_url": COINDESK_RSS_FEED_URL}
-    assert Path(observation["saved_paths"]["normalized"]).exists()
-    assert Path(observation["saved_paths"]["summary"]).exists()
+    assert_saved_summary_matches_observation(observation)
 
-    saved_bundle = json.loads(Path(observation["saved_paths"]["normalized"]).read_text(encoding="utf-8"))
+    saved_bundle = load_saved_json(observation["saved_paths"]["normalized"])
     assert saved_bundle["summary"]["record_count"] == 2
     assert saved_bundle["summary"]["categories"] == ["markets", "policy"]
     assert saved_bundle["summary"]["unique_dedup_key_count"] == 2
     assert saved_bundle["summary"]["duplicate_count"] == 0
     assert "dedup_key" in saved_bundle["records"][0]
-    saved_summary = json.loads(Path(observation["saved_paths"]["summary"]).read_text(encoding="utf-8"))
-    assert saved_summary == observation
 
 
 def test_run_news_collector_collects_sec_records_and_tracks_source_specific_summary(tmp_path: Path) -> None:
@@ -341,12 +343,12 @@ def test_run_news_collector_collects_sec_records_and_tracks_source_specific_summ
     assert observation["category_distribution"] == {"enforcement": 1, "rulemaking": 1}
     assert observation["source_specific"] == {"feed_url": SEC_PRESS_RELEASES_RSS_FEED_URL}
     assert observation["published_at_by_hour_utc"] == {"2026-03-24T03:00:00Z": 2}
-    assert Path(observation["saved_paths"]["summary"]).exists()
+    assert_saved_summary_matches_observation(observation)
 
-    saved_bundle = json.loads(Path(observation["saved_paths"]["normalized"]).read_text(encoding="utf-8"))
+    saved_bundle = load_saved_json(observation["saved_paths"]["normalized"])
     assert saved_bundle["summary"]["sources"] == ["sec"]
     assert saved_bundle["summary"]["unique_dedup_key_count"] == 2
-    saved_summary = json.loads(Path(observation["saved_paths"]["summary"]).read_text(encoding="utf-8"))
+    saved_summary = load_saved_json(observation["saved_paths"]["summary"])
     assert saved_summary["signal_type"] == "news"
     assert saved_summary["source_specific"] == {"feed_url": SEC_PRESS_RELEASES_RSS_FEED_URL}
 
@@ -371,8 +373,7 @@ def test_run_news_collector_skips_summary_file_when_disabled_boundary_case(tmp_p
 
     observation = result["observation"]
     assert observation["status"] == "completed"
-    assert "summary" not in observation["saved_paths"]
-    assert Path(observation["saved_paths"]["normalized"]).exists()
+    assert_summary_not_saved(observation)
 
 
 def test_run_news_collector_collects_federal_reserve_records_and_saves_them(tmp_path: Path) -> None:

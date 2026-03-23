@@ -5,6 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.external_signal_test_helpers import (
+    assert_saved_summary_matches_observation,
+    assert_summary_not_saved,
+    load_saved_json,
+)
 from trade_simulator.sns_adapters import (
     REDDIT_SUBREDDIT_NEW_JSON_URL,
     adapt_reddit_post,
@@ -180,16 +185,34 @@ def test_run_sns_collector_collects_reddit_records_and_saves_them(tmp_path: Path
         "2026-03-20T17:00:00Z": 1,
         "2026-03-20T18:00:00Z": 1,
     }
-    assert Path(observation["saved_paths"]["normalized"]).exists()
-    assert Path(observation["saved_paths"]["summary"]).exists()
+    assert_saved_summary_matches_observation(observation)
 
-    saved_bundle = json.loads(Path(observation["saved_paths"]["normalized"]).read_text(encoding="utf-8"))
+    saved_bundle = load_saved_json(observation["saved_paths"]["normalized"])
     assert saved_bundle["summary"]["record_count"] == 2
     assert saved_bundle["summary"]["total_mentions"] == 12
     assert saved_bundle["summary"]["unique_dedup_key_count"] == 2
     assert saved_bundle["summary"]["duplicate_count"] == 0
-    saved_summary = json.loads(Path(observation["saved_paths"]["summary"]).read_text(encoding="utf-8"))
-    assert saved_summary == observation
+
+
+def test_run_sns_collector_skips_reddit_summary_file_when_disabled_boundary_case(tmp_path: Path) -> None:
+    config = {
+        "collector": {
+            "source": "reddit_subreddit_new_json",
+        },
+        "output": {
+            "output_dir": str(tmp_path / "var"),
+            "save_run_summary": False,
+        },
+    }
+
+    result = run_sns_collector(
+        config,
+        fetch_listing_fn=lambda listing_url, timeout_seconds: REDDIT_TWO_ITEMS,
+        now_fn=lambda: 1_774_000_000.0,
+    )
+
+    assert result["observation"]["status"] == "completed"
+    assert_summary_not_saved(result["observation"])
 
 
 def test_run_sns_collector_handles_empty_listing_boundary_case(tmp_path: Path) -> None:
