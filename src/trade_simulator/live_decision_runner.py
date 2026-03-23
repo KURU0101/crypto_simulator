@@ -802,6 +802,7 @@ def run_live_decision_runner(
     equity_history: list[dict] = []
     progress_log: list[dict] = []
     latest_result: dict | None = None
+    session_start_signal_index: int | None = None
     status = "completed"
     stop_reason = "duration_elapsed"
     error_message: str | None = None
@@ -862,6 +863,7 @@ def run_live_decision_runner(
                     counters["observed_confirmed_candles"] += 1
                     if counters["observed_confirmed_candles"] == runtime["warmup_candles"]:
                         counters["warmup_completed_timestamp"] = last_confirmed_timestamp
+                        session_start_signal_index = max(len(confirmed_rows) - 1, 0)
 
                     if counters["observed_confirmed_candles"] <= runtime["warmup_candles"]:
                         progress_reason_code = "warmup_pending"
@@ -899,7 +901,11 @@ def run_live_decision_runner(
                         latest_result = _append_decision_entries(
                             strategy_config=validated_config["strategy"],
                             confirmed_rows=confirmed_rows,
-                            session_start_index=max(runtime["warmup_candles"] - 1, 0),
+                            session_start_index=(
+                                session_start_signal_index
+                                if session_start_signal_index is not None
+                                else max(len(confirmed_rows) - 1, 0)
+                            ),
                             latest_row=confirmed_rows[-1],
                             decision_log=decision_log,
                             equity_history=equity_history,
@@ -930,6 +936,7 @@ def run_live_decision_runner(
                         counters["observed_confirmed_candles"] += 1
                         if counters["observed_confirmed_candles"] == runtime["warmup_candles"]:
                             counters["warmup_completed_timestamp"] = last_confirmed_timestamp
+                            session_start_signal_index = max(len(confirmed_rows) - 1, 0)
 
                         if counters["observed_confirmed_candles"] <= runtime["warmup_candles"]:
                             progress_reason_code = "warmup_pending"
@@ -970,7 +977,11 @@ def run_live_decision_runner(
                         latest_result = _append_decision_entries(
                             strategy_config=validated_config["strategy"],
                             confirmed_rows=confirmed_rows,
-                            session_start_index=max(runtime["warmup_candles"] - 1, 0),
+                            session_start_index=(
+                                session_start_signal_index
+                                if session_start_signal_index is not None
+                                else max(len(confirmed_rows) - 1, 0)
+                            ),
                             latest_row=row,
                             decision_log=decision_log,
                             equity_history=equity_history,
