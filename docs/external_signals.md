@@ -100,6 +100,94 @@ News 候補:
 
 最初の接続先としては、RSS や公開 JSON を持つ News ソースが最も軽く、次に Reddit の手動・定期集計が妥当です。今回の形式には、取得後に source ごとの生項目を `metadata` に残しつつ、本文側は `source` / `symbol|topic` / `time` / score 群へ写像して流し込みます。
 
+## Minimal SNS Collector
+
+今回の collector は `reddit_subreddit_new_json` の 1 ソースだけを対象にします。利用は Reddit の公開 listing JSON に対する GET のみで、raw JSON は保存しません。
+
+採用した 1 本目:
+
+- `reddit_subreddit_new_json`
+- listing URL: `https://www.reddit.com/r/CryptoCurrency/new.json`
+- 選定理由: 無料公開 JSON で取得でき、post 単位の timestamp / title / comment count / score を持つため、`sns_signals` の最小 schema と observation を検証しやすいため
+
+今回の割り切り:
+
+- 取得対象は 1 subreddit の `new` listing に固定
+- `mention_count` は `num_comments` を採用
+- sentiment / activity / anomaly は収集導線確認用の簡易ヒューリスティクス
+- BTC / ETH だけ symbol 推定し、それ以外は topic-only を基本にする
+
+責務分離:
+
+- collector: listing JSON GET と `children[].data` 抽出
+- adapter: Reddit post を `sns_signals` schema へ正規化
+- save: 正規化後 bundle と観測 summary のみ保存
+- observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、source/symbol/topic 分布、mention_count 要約、timestamp 分布、warning、error を集計
+
+source ごとの切り分け:
+
+- 共通: fetch、JSON parse、保存、run_id 生成、observation 集計
+- source 固有: listing URL、post adapter、symbol/topic 判定、簡易 score ヒューリスティクス
+- source 固有で吸収しきれない差分は `metadata` に逃がす
+
+adapter 境界:
+
+- 共通 collector 本体: [src/trade_simulator/sns_collector.py](/home/kuru0101/crypto_simulator/crypto_simulator/src/trade_simulator/sns_collector.py)
+- source adapter 群: [src/trade_simulator/sns_adapters.py](/home/kuru0101/crypto_simulator/crypto_simulator/src/trade_simulator/sns_adapters.py)
+- Reddit の `created_utc` 正規化、topic/symbol 推定、`mention_count` / score 群の簡易生成は adapter 側で吸収する
+- collector 側は source registry を見て adapter を呼び、共通保存と observation 集計だけを担当する
+
+dedup key の生成規則:
+
+- record ごとに `dedup_key` を持つ
+- 生成種別は `source:sha1(prefix)` 形式
+- seed は `source | timestamp | entity_key | locator_kind | locator_value`
+- `locator_kind` は `source_id` を優先し、無ければ `permalink`
+- これは軽量 dedup 用であり、cross-source の完全な同一性保証は行わない
+- run summary の `duplicate_count` は、同一 run 内で `dedup_key` が重複した 2 件目以降の件数
+
+実行:
+
+- `python3 scripts/run_sns_collector.py --config config/sns_collector.reddit.example.json`
+
+保存:
+
+- `var/sns_signals/reddit_subreddit_new_json/<run_id>/normalized.json`
+- `var/sns_signals/reddit_subreddit_new_json/<run_id>/summary.json`
+
+観測できる項目:
+
+- `run_id`
+- `started_at`
+- `ended_at`
+- `duration_seconds`
+- `signal_type`
+- `source`
+- `listing_url`
+- `fetched_item_count`
+- `normalized_success_count`
+- `normalized_failure_count`
+- `validation_failure_count`
+- `saved_record_count`
+- `duplicate_count`
+- `missing_field_counts`
+- `source_distribution`
+- `symbol_distribution`
+- `topic_distribution`
+- `mention_count_summary`
+- `timestamp_by_date`
+- `timestamp_by_hour_utc`
+- `warnings`
+- `errors`
+- `saved_paths`
+
+source 増加で見えた制約:
+
+- collector 設定はまだ 1 run 1 source 固定で、複数 source 同時収集は未対応
+- topic / symbol 推定は source 依存が強く、今回は BTC / ETH 以外を topic-only に寄せている
+- sentiment / activity / anomaly は簡易ヒューリスティクスであり、分析用スコアの完成形ではない
+- Reddit 固有の rate limit や listing 粒度差分を吸収する共通抽象はまだ持たない
+
 ## Minimal News Collector
 
 今回の collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` の 3 ソースを対象にします。利用は公開 RSS の GET のみで、raw XML は保存しません。

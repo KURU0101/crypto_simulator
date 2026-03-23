@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from trade_simulator.external_signal_common import (
@@ -12,6 +13,35 @@ from trade_simulator.external_signal_common import (
     normalize_timestamp_to_utc_z,
     normalize_topic,
 )
+
+
+def _build_sns_dedup_key(record: dict) -> str:
+    source = _require_non_empty_string(record.get("source"), "sns_signal.source").lower()
+    timestamp = normalize_timestamp_to_utc_z(record.get("timestamp"), "sns_signal.timestamp")
+    symbol = _require_optional_string(record.get("symbol"), "sns_signal.symbol")
+    topic = _require_optional_string(record.get("topic"), "sns_signal.topic")
+    metadata = record.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("sns_signal.metadata must be a dict")
+
+    entity_kind = "symbol" if symbol is not None else "topic"
+    entity_value = normalize_symbol_for_external_signal(symbol) if symbol is not None else normalize_topic(topic or "")
+    source_id = metadata.get("source_id")
+    permalink = metadata.get("permalink")
+    title = metadata.get("title")
+    locator_kind = "source_id"
+    locator_value = str(source_id).strip() if source_id is not None else ""
+    if not locator_value:
+        locator_kind = "permalink"
+        locator_value = str(permalink).strip().lower() if permalink is not None else ""
+    if not locator_value:
+        locator_kind = "title"
+        locator_value = " ".join(str(title or "").strip().lower().split())
+
+    seed = f"{source}|{timestamp}|{entity_kind}|{entity_value}|{locator_kind}|{locator_value}"
+    return f"{source}:{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:16]}"
 
 
 def normalize_sns_signal_record(record: object, *, entry_name: str = "sns_signal") -> dict:
@@ -42,6 +72,11 @@ def normalize_sns_signal_record(record: object, *, entry_name: str = "sns_signal
     if not isinstance(metadata, dict):
         raise ValueError(f"{entry_name}.metadata must be a dict")
     normalized["metadata"] = dict(metadata)
+    dedup_key = record.get("dedup_key")
+    if dedup_key is not None:
+        normalized["dedup_key"] = _require_non_empty_string(dedup_key, f"{entry_name}.dedup_key")
+    elif normalized["metadata"]:
+        normalized["dedup_key"] = _build_sns_dedup_key(record)
 
     normalized["entity_key"] = normalized["symbol"] if normalized["symbol"] is not None else normalized["topic"]
     normalized["entity_kind"] = "symbol" if normalized["symbol"] is not None else "topic"
@@ -62,6 +97,7 @@ def build_sns_signal_bundle(records: object) -> dict:
     normalized_records = normalize_sns_signal_records(records)
     by_symbol: dict[str, list[dict]] = {}
     by_topic: dict[str, list[dict]] = {}
+    dedup_keys = [record["dedup_key"] for record in normalized_records if "dedup_key" in record]
 
     for record in normalized_records:
         if record["symbol"] is not None:
@@ -79,6 +115,8 @@ def build_sns_signal_bundle(records: object) -> dict:
         "total_mentions": sum(record["mention_count"] for record in normalized_records),
         "max_activity_score": max((record["activity_score"] for record in normalized_records), default=None),
         "max_anomaly_score": max((record["anomaly_score"] for record in normalized_records), default=None),
+        "unique_dedup_key_count": len(set(dedup_keys)),
+        "duplicate_count": len(dedup_keys) - len(set(dedup_keys)),
     }
 
     return {

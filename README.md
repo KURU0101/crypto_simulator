@@ -86,6 +86,13 @@ python3 scripts/run_news_collector.py --config config/news_collector.sec.example
 python3 scripts/run_news_collector.py --config config/news_collector.federal_reserve.example.json
 ```
 
+無料 SNS ソースの最小収集例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_sns_collector.py --config config/sns_collector.reddit.example.json
+```
+
 `Makefile` を使う場合:
 
 ```bash
@@ -221,6 +228,8 @@ SNS は `source` / `timestamp` / `mention_count` / `positive_score` / `negative_
 News は `source` / `published_at` / `headline` / `relevance_score` / `sentiment_score` / `impact_score` / `category` と、`url` または `source_id`、さらに `symbol` / `asset` / `topic` のいずれかを持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_asset` / `by_topic` を返します。
 
 最小 news collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` をサポートし、いずれも RSS GET のみを行います。source ごとの adapter は collector 本体から分離し、保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/news_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `category_distribution` と `duplicate_count` を含む観測を残します。
+
+最小 SNS collector は `reddit_subreddit_new_json` をサポートし、Reddit の公開 listing JSON を GET して `sns_signals` schema に正規化します。保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/sns_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `mention_count_summary` と `duplicate_count` を含む観測を残します。
 
 サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
 設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。
