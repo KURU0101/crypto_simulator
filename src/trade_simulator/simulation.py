@@ -20,8 +20,12 @@ def simulate(config: dict) -> dict:
     equity_curve = [initial_cash]
     current_value = initial_cash
     is_in_position = False
+    trade_log = []
+    active_trade = None
 
-    for period_return, entry_signal, exit_signal in zip(returns, entry_signals, exit_signals):
+    for period_index, (period_return, entry_signal, exit_signal) in enumerate(
+        zip(returns, entry_signals, exit_signals)
+    ):
         executed_entry = False
         executed_exit = False
 
@@ -32,15 +36,38 @@ def simulate(config: dict) -> dict:
             executed_entry = not is_in_position
             is_in_position = True
 
+        if executed_exit and active_trade is not None:
+            active_trade["exit_index"] = period_index
+            active_trade["exited"] = True
+
         event_count = int(executed_entry) + int(executed_exit)
         if event_count:
             current_value -= current_value * (fee_rate + slippage_rate) * event_count
+
+        if executed_entry:
+            active_trade = {
+                "entry_index": period_index,
+                "exit_index": None,
+                "holding_periods": 0,
+                "entered": True,
+                "exited": False,
+                "entry_equity": current_value,
+                "pnl_amount": None,
+            }
+            trade_log.append(active_trade)
 
         position.append(is_in_position)
 
         if is_in_position:
             current_value *= 1 + period_return
+            if active_trade is not None:
+                active_trade["holding_periods"] += 1
         equity_curve.append(current_value)
+
+        if executed_exit and active_trade is not None:
+            active_trade["pnl_amount"] = current_value - active_trade["entry_equity"]
+            del active_trade["entry_equity"]
+            active_trade = None
 
     trade_count = 0
     was_in_position = False
@@ -51,6 +78,10 @@ def simulate(config: dict) -> dict:
         was_in_position = is_in_position
 
     periods_in_position = sum(position)
+
+    if active_trade is not None:
+        active_trade["pnl_amount"] = current_value - active_trade["entry_equity"]
+        del active_trade["entry_equity"]
 
     return {
         "simulation_name": config["simulation_name"],
@@ -63,6 +94,7 @@ def simulate(config: dict) -> dict:
         "position": position,
         "trade_count": trade_count,
         "periods_in_position": periods_in_position,
+        "trade_log": trade_log,
         "equity_curve": equity_curve,
         "final_value": current_value,
     }

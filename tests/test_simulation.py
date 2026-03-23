@@ -40,6 +40,25 @@ def test_simulate_matches_manually_verified_example_with_zero_costs() -> None:
     assert result["position"] == [True, False, True, True]
     assert result["trade_count"] == 2
     assert result["periods_in_position"] == 3
+    assert len(result["trade_log"]) == result["trade_count"]
+    assert result["trade_log"] == [
+        {
+            "entry_index": 0,
+            "exit_index": 1,
+            "holding_periods": 1,
+            "entered": True,
+            "exited": True,
+            "pnl_amount": 10000.0,
+        },
+        {
+            "entry_index": 2,
+            "exit_index": None,
+            "holding_periods": 2,
+            "entered": True,
+            "exited": False,
+            "pnl_amount": 40703.0,
+        },
+    ]
     assert result["equity_curve"] == [1000000.0, 1010000.0, 1010000.0, 1040300.0, 1050703.0]
     assert result["final_value"] == 1050703.0
     assert result["final_value"] == result["equity_curve"][-1]
@@ -69,6 +88,7 @@ def test_simulate_returns_expected_result_fields() -> None:
         "position",
         "trade_count",
         "periods_in_position",
+        "trade_log",
         "equity_curve",
         "final_value",
     }
@@ -81,8 +101,44 @@ def test_simulate_returns_expected_result_fields() -> None:
     assert result["position"] == [True, False, False]
     assert result["trade_count"] == 1
     assert result["periods_in_position"] == 1
+    assert result["trade_log"] == [
+        {
+            "entry_index": 0,
+            "exit_index": 1,
+            "holding_periods": 1,
+            "entered": True,
+            "exited": True,
+            "pnl_amount": 100.0,
+        }
+    ]
     assert result["equity_curve"] == [1000.0, 1100.0, 1100.0, 1100.0]
     assert result["final_value"] == 1100.0
+
+
+def test_simulate_creates_one_trade_log_entry_for_single_completed_trade() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
+        "returns": [0.1, 0.05],
+        "entry_signals": [True, False],
+        "exit_signals": [False, True],
+    }
+
+    result = simulate(config)
+
+    assert result["trade_count"] == 1
+    assert result["trade_log"] == [
+        {
+            "entry_index": 0,
+            "exit_index": 1,
+            "holding_periods": 1,
+            "entered": True,
+            "exited": True,
+            "pnl_amount": 100.0,
+        }
+    ]
 
 
 def test_simulate_applies_entry_cost_before_return() -> None:
@@ -165,6 +221,25 @@ def test_simulate_counts_multiple_entries_as_multiple_trades() -> None:
     assert result["trade_count"] == 2
     assert result["periods_in_position"] == 3
     assert result["periods_in_position"] == sum(result["position"])
+    assert len(result["trade_log"]) == result["trade_count"]
+    assert result["trade_log"] == [
+        {
+            "entry_index": 0,
+            "exit_index": 1,
+            "holding_periods": 1,
+            "entered": True,
+            "exited": True,
+            "pnl_amount": 100.0,
+        },
+        {
+            "entry_index": 3,
+            "exit_index": None,
+            "holding_periods": 2,
+            "entered": True,
+            "exited": False,
+            "pnl_amount": 21.670000000000073,
+        },
+    ]
     assert result["equity_curve"] == [1000.0, 1100.0, 1100.0, 1100.0, 1133.0, 1121.67]
     assert result["final_value"] == 1121.67
     assert result["final_value"] == result["equity_curve"][-1]
@@ -261,6 +336,7 @@ def test_simulate_returns_initial_cash_only_for_empty_returns() -> None:
     assert result["position"] == []
     assert result["trade_count"] == 0
     assert result["periods_in_position"] == 0
+    assert result["trade_log"] == []
     assert result["equity_curve"] == [1000.0]
     assert result["final_value"] == 1000.0
     assert result["final_value"] == result["equity_curve"][-1]
@@ -282,6 +358,7 @@ def test_simulate_keeps_equity_flat_when_never_in_position() -> None:
     assert result["position"] == [False, False, False]
     assert result["trade_count"] == 0
     assert result["periods_in_position"] == 0
+    assert result["trade_log"] == []
     assert result["equity_curve"] == [1000.0, 1000.0, 1000.0, 1000.0]
     assert result["final_value"] == 1000.0
 
@@ -322,6 +399,16 @@ def test_simulate_applies_only_entry_cost_when_position_never_exits() -> None:
     assert result["position"] == [True, True]
     assert result["trade_count"] == 1
     assert result["periods_in_position"] == 2
+    assert result["trade_log"] == [
+        {
+            "entry_index": 0,
+            "exit_index": None,
+            "holding_periods": 2,
+            "entered": True,
+            "exited": False,
+            "pnl_amount": pytest.approx(150.35000000000014),
+        }
+    ]
     assert result["equity_curve"] == pytest.approx([1000.0, 1067.0, 1120.35])
     assert result["final_value"] == pytest.approx(1120.35)
 
@@ -376,6 +463,16 @@ def test_simulate_exit_wins_when_entry_and_exit_are_both_true() -> None:
     assert result["position"] == [True, False]
     assert result["trade_count"] == 1
     assert result["periods_in_position"] == 1
+    assert result["trade_log"] == [
+        {
+            "entry_index": 0,
+            "exit_index": 1,
+            "holding_periods": 1,
+            "entered": True,
+            "exited": True,
+            "pnl_amount": 100.0,
+        }
+    ]
     assert result["equity_curve"] == [1000.0, 1100.0, 1100.0]
     assert result["final_value"] == 1100.0
 
@@ -396,5 +493,6 @@ def test_simulate_same_period_entry_and_exit_results_in_no_position() -> None:
     assert result["position"] == [False]
     assert result["trade_count"] == 0
     assert result["periods_in_position"] == 0
+    assert result["trade_log"] == []
     assert result["equity_curve"] == [1000.0, 1000.0]
     assert result["final_value"] == 1000.0
