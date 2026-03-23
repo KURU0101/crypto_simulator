@@ -91,11 +91,10 @@
   - 再現性（実行・検証手順が明確か）
 
 ## Commit rules
-- ユーザーが明示的に許可した場合のみ commit する
 - commit 前に変更ファイル一覧と要約を提示する
 - commit メッセージは簡潔にする（conventional commits 風）
 - main に直接 commit しない
-- push は行わない
+- push / merge はユーザーの明示的な指示がある場合のみ行う
 
 ## Commit safety rules
 - git add は対象ファイルを明示して行う（`git add .` は使用しない）

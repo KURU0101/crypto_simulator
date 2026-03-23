@@ -17,6 +17,7 @@ def test_scan_saved_signal_summaries_reads_news_and_sns_runs(tmp_path: Path) -> 
         fetched_item_count=2,
         normalized_success_count=2,
         saved_record_count=2,
+        source_specific={"feed_url": "https://example.invalid/feed.xml"},
         symbol_distribution={"BTCUSDT": 1},
         topic_distribution={"bitcoin": 1, "policy": 1},
     )
@@ -52,6 +53,7 @@ def test_scan_saved_signal_summaries_reads_news_and_sns_runs(tmp_path: Path) -> 
     assert news_entry["topic_distribution_overview"] == "bitcoin:1, policy:1"
     assert news_entry["warning_count"] == 0
     assert news_entry["error_count"] == 0
+    assert news_entry["has_source_specific"] is True
 
     assert sns_entry["status"] == "failed"
     assert sns_entry["warning_count"] == 1

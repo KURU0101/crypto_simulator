@@ -167,7 +167,6 @@ make test
 ```
 
 comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
-comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
 
 ## 実データフェーズ
 
@@ -229,7 +228,7 @@ SNS は `source` / `timestamp` / `mention_count` / `positive_score` / `negative_
 
 News は `source` / `published_at` / `headline` / `relevance_score` / `sentiment_score` / `impact_score` / `category` と、`url` または `source_id`、さらに `symbol` / `asset` / `topic` のいずれかを持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_asset` / `by_topic` を返します。
 
-最小 news collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` をサポートし、いずれも RSS GET のみを行います。source ごとの adapter は collector 本体から分離し、保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/news_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `category_distribution` と `duplicate_count` を含む観測を残します。
+最小 news collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` をサポートし、いずれも RSS GET のみを行います。source ごとの adapter は collector 本体から分離し、保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/news_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `signal_type`、`category_distribution`、`duplicate_count`、`source_specific.feed_url` を含む観測を残します。
 
 最小 SNS collector は `reddit_subreddit_new_json` をサポートし、Reddit の公開 listing JSON を GET して `sns_signals` schema に正規化します。保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/sns_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `mention_count_summary` と `duplicate_count` を含む観測を残します。
 

@@ -157,6 +157,7 @@ def _empty_observation(*, source: str, feed_url: str, started_at: str) -> dict:
     return {
         "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
+        "signal_type": "news",
         "source": source,
         "feed_url": feed_url,
         "started_at": started_at,
@@ -179,6 +180,9 @@ def _empty_observation(*, source: str, feed_url: str, started_at: str) -> dict:
         "warnings": [],
         "errors": [],
         "saved_paths": {},
+        "source_specific": {
+            "feed_url": feed_url,
+        },
     }
 
 
@@ -227,6 +231,7 @@ def _build_observation(
     return {
         "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
+        "signal_type": "news",
         "source": source,
         "feed_url": feed_url,
         "started_at": started_at,
@@ -249,6 +254,9 @@ def _build_observation(
         "warnings": warnings,
         "errors": normalized_failures,
         "saved_paths": saved_paths,
+        "source_specific": {
+            "feed_url": feed_url,
+        },
     }
 
 

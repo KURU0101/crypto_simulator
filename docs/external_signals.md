@@ -228,6 +228,7 @@ dedup key の生成規則:
 観測できる項目:
 
 - `run_id`
+- `signal_type`
 - `started_at`
 - `ended_at`
 - `duration_seconds`
