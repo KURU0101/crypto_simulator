@@ -11,6 +11,17 @@
     "exit_threshold": -0.01
   },
   {
+    "name": "threshold_with_cost",
+    "strategy": "threshold",
+    "simulation_name": "threshold_with_cost",
+    "initial_cash": 100000,
+    "fee_rate": 0.001,
+    "slippage_rate": 0.001,
+    "returns": [0.004, -0.006, -0.004, -0.003, 0.006, -0.003, 0.012, -0.011, -0.007, -0.006, 0.01, 0.009],
+    "entry_threshold": 0.01,
+    "exit_threshold": -0.01
+  },
+  {
     "name": "cumulative_drop_fast",
     "strategy": "cumulative_drop",
     "simulation_name": "cumulative_drop_fast",
