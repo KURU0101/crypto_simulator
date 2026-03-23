@@ -83,6 +83,14 @@ def simulate(config: dict) -> dict:
         active_trade["pnl_amount"] = current_value - active_trade["entry_equity"]
         del active_trade["entry_equity"]
 
+    exited_trades = [trade for trade in trade_log if trade["exited"]]
+    winning_trades = sum(1 for trade in exited_trades if trade["pnl_amount"] > 0)
+    losing_trades = sum(1 for trade in exited_trades if trade["pnl_amount"] < 0)
+    realized_pnl_total = sum(trade["pnl_amount"] for trade in exited_trades)
+    average_holding_period = 0.0
+    if exited_trades:
+        average_holding_period = sum(trade["holding_periods"] for trade in exited_trades) / len(exited_trades)
+
     return {
         "simulation_name": config["simulation_name"],
         "initial_cash": initial_cash,
@@ -95,6 +103,10 @@ def simulate(config: dict) -> dict:
         "trade_count": trade_count,
         "periods_in_position": periods_in_position,
         "trade_log": trade_log,
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "realized_pnl_total": realized_pnl_total,
+        "average_holding_period": average_holding_period,
         "equity_curve": equity_curve,
         "final_value": current_value,
     }
