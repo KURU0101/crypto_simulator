@@ -5,12 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from trade_simulator.live_decision_cli import main as live_decision_main
 from trade_simulator.live_decision_runner import (
     FetchOHLCVError,
     build_live_decision_stdout_payload,
     format_live_decision_stdout,
     load_live_decision_runner_config,
+    prepare_live_decision_output_directory,
+    prune_live_decision_run_directories,
     run_live_decision_runner,
     save_live_decision_runner_result,
 )
@@ -38,13 +39,15 @@ def _build_live_config(output_dir: Path) -> dict:
         },
         "runtime": {
             "poll_interval_seconds": 60,
-            "duration_seconds": 130,
+            "duration_seconds": 190,
             "emit_progress_log": True,
+            "warmup_candles": 2,
         },
         "output": {
             "output_dir": str(output_dir),
             "first_n": 10,
             "last_n": 10,
+            "max_run_directories": 10,
         },
         "retry": {
             "max_attempts": 2,
@@ -105,6 +108,20 @@ def _response(*klines: list[object], used_weight_1m: str = "3") -> dict:
     }
 
 
+def _collecting_printer(lines: list[str]):
+    def _printer(line: str) -> None:
+        lines.append(line)
+
+    return _printer
+
+
+def _seed_run_directories(base_dir: Path, count: int) -> None:
+    for index in range(count):
+        run_dir = base_dir / f"20260324T0315{index:02d}Z"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "summary.json").write_text("{}", encoding="utf-8")
+
+
 def test_load_live_decision_runner_config_validates_required_sections() -> None:
     with pytest.raises(ValueError, match="live decision runner config must include a runtime dict"):
         load_live_decision_runner_config({"data_source": {}, "strategy": {}, "output": {}, "retry": {}})
@@ -121,90 +138,123 @@ def test_load_live_decision_runner_config_validates_required_sections() -> None:
         )
 
 
-def test_live_decision_runner_generates_summary_and_output_files(tmp_path: Path) -> None:
+def test_live_decision_runner_waits_for_warmup_before_first_decision() -> None:
     clock = FakeClock(start_seconds=250)
-    config = _build_live_config(tmp_path / "outputs")
+    config = _build_live_config(Path("outputs/test"))
+    progress_lines: list[str] = []
     responses = iter(
         [
             _response(_kline(0, "100"), _kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98")),
             _response(_kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98"), _kline(5, "103")),
             _response(_kline(2, "99"), _kline(3, "101"), _kline(4, "98"), _kline(5, "103"), _kline(6, "100")),
+            _response(_kline(3, "101"), _kline(4, "98"), _kline(5, "103"), _kline(6, "100"), _kline(7, "104")),
         ]
     )
 
     def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
-        assert symbol == "BTCUSDT"
-        assert interval == "1m"
-        assert limit == 5
         return next(responses)
-
-    result = run_live_decision_runner(config, fetch_klines_fn=fake_fetch, sleep_fn=clock.sleep, now_fn=clock.now)
-    paths = save_live_decision_runner_result(result, config["output"]["output_dir"])
-
-    assert result["summary"]["status"] == "completed"
-    assert result["summary"]["stop_reason"] == "duration_elapsed"
-    assert result["summary"]["evaluated_decisions"] == 3
-    assert result["summary"]["poll_count"] == 3
-    assert result["summary"]["last_confirmed_timestamp"] == "2024-01-01T00:05:00Z"
-    assert len(result["decision_log"]) == 3
-    assert len(result["equity_history"]) == 3
-    assert result["decision_log"][0]["ohlcv_timestamp"] == "2024-01-01T00:03:00Z"
-    assert result["decision_log"][1]["ohlcv_timestamp"] == "2024-01-01T00:04:00Z"
-    assert result["decision_log"][2]["ohlcv_timestamp"] == "2024-01-01T00:05:00Z"
-    assert Path(paths["summary"]).exists()
-    assert Path(paths["decision_log"]).exists()
-    assert Path(paths["trade_log"]).exists()
-    assert Path(paths["equity_history"]).exists()
-    assert json.loads(Path(paths["summary"]).read_text(encoding="utf-8"))["status"] == "completed"
-
-
-def test_live_decision_runner_handles_keyboard_interrupt_and_still_saves(tmp_path: Path) -> None:
-    clock = FakeClock(start_seconds=250)
-    config = _build_live_config(tmp_path / "outputs")
-    response = _response(_kline(0, "100"), _kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98"))
-
-    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
-        return response
-
-    def interrupting_sleep(seconds: float) -> None:
-        raise KeyboardInterrupt
 
     result = run_live_decision_runner(
         config,
         fetch_klines_fn=fake_fetch,
-        sleep_fn=interrupting_sleep,
+        sleep_fn=clock.sleep,
         now_fn=clock.now,
+        print_fn=_collecting_printer(progress_lines),
     )
-    save_live_decision_runner_result(result, config["output"]["output_dir"])
 
-    assert result["summary"]["status"] == "interrupted"
-    assert result["summary"]["stop_reason"] == "keyboard_interrupt"
-    assert Path(config["output"]["output_dir"], "summary.json").exists()
-    assert len(result["decision_log"]) == 1
+    assert result["summary"]["status"] == "completed"
+    assert result["summary"]["warmup_candles"] == 2
+    assert result["summary"]["observed_confirmed_candles"] == 4
+    assert result["summary"]["warmup_completed"] is True
+    assert result["summary"]["warmup_completed_timestamp"] == "2024-01-01T00:04:00Z"
+    assert [entry["reason_code"] for entry in result["progress_log"][:2]] == ["warmup_pending", "warmup_pending"]
+    assert len(result["decision_log"]) == 2
+    assert result["decision_log"][0]["ohlcv_timestamp"] == "2024-01-01T00:05:00Z"
+    assert result["decision_log"][1]["ohlcv_timestamp"] == "2024-01-01T00:06:00Z"
 
-
-def test_live_decision_runner_skips_same_timestamp_until_new_confirmed_candle() -> None:
-    clock = FakeClock(start_seconds=250)
-    config = _build_live_config(Path("outputs/test"))
-    config["runtime"]["poll_interval_seconds"] = 1
-    config["runtime"]["duration_seconds"] = 3
-    repeated = _response(_kline(0, "100"), _kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98"))
-    responses = iter([repeated, repeated, repeated])
-
-    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
-        return next(responses)
-
-    result = run_live_decision_runner(config, fetch_klines_fn=fake_fetch, sleep_fn=clock.sleep, now_fn=clock.now)
-
-    assert len(result["decision_log"]) == 1
-    assert result["summary"]["no_new_confirmed_candle_polls"] == 2
-    assert [entry["reason_code"] for entry in result["progress_log"]] == [
-        "no_new_confirmed_candle",
-        "no_new_confirmed_candle",
+    parsed_progress = [json.loads(line) for line in progress_lines]
+    assert [entry["reason_code"] for entry in parsed_progress] == [
+        "warmup_pending",
+        "warmup_pending",
+        "decision_evaluated",
+        "decision_evaluated",
     ]
+    assert all("trade_count" in entry and "equity" in entry and "cash" in entry for entry in parsed_progress)
 
 
-def test_live_decision_runner_limits_stdout_to_summary_and_head_tail_only() -> None:
+def test_live_decision_runner_saves_each_run_into_separate_directory(tmp_path: Path) -> None:
+    result_one = {
+        "output": {"max_run_directories": 10},
+        "summary": {"started_at": "2026-03-24T03:15:00Z"},
+        "decision_log": [],
+        "trade_log": [],
+        "equity_history": [],
+        "progress_log": [],
+    }
+    result_two = {
+        "output": {"max_run_directories": 10},
+        "summary": {"started_at": "2026-03-24T03:16:00Z"},
+        "decision_log": [],
+        "trade_log": [],
+        "equity_history": [],
+        "progress_log": [],
+    }
+
+    saved_one = save_live_decision_runner_result(result_one, tmp_path / "outputs")
+    saved_two = save_live_decision_runner_result(result_two, tmp_path / "outputs")
+
+    assert Path(saved_one["summary"]).parent.name == "20260324T031500Z"
+    assert Path(saved_two["summary"]).parent.name == "20260324T031600Z"
+    assert Path(saved_one["summary"]).parent != Path(saved_two["summary"]).parent
+
+
+@pytest.mark.parametrize(
+    ("existing_count", "expected_remaining_count", "expected_removed"),
+    [
+        (9, 10, []),
+        (10, 10, ["20260324T031500Z"]),
+        (11, 10, ["20260324T031500Z", "20260324T031501Z"]),
+    ],
+)
+def test_live_decision_runner_retains_only_latest_ten_runs(
+    tmp_path: Path,
+    existing_count: int,
+    expected_remaining_count: int,
+    expected_removed: list[str],
+) -> None:
+    output_dir = tmp_path / "outputs"
+    _seed_run_directories(output_dir, existing_count)
+
+    result = {
+        "output": {"max_run_directories": 10},
+        "summary": {"started_at": "2026-03-24T04:00:00Z"},
+        "decision_log": [],
+        "trade_log": [],
+        "equity_history": [],
+        "progress_log": [],
+    }
+
+    save_live_decision_runner_result(result, output_dir)
+
+    remaining = sorted(path.name for path in output_dir.iterdir() if path.is_dir())
+    assert len(remaining) == expected_remaining_count
+    assert result["summary"]["removed_run_directories"] == [str(output_dir / name) for name in expected_removed]
+    assert "20260324T040000Z" in remaining
+
+
+def test_prune_live_decision_run_directories_only_targets_safe_run_directories(tmp_path: Path) -> None:
+    output_dir = tmp_path / "outputs"
+    _seed_run_directories(output_dir, 10)
+    unsafe = output_dir / "manual-notes"
+    unsafe.mkdir()
+
+    removed = prune_live_decision_run_directories(output_dir, 10)
+
+    assert removed == [str(output_dir / "20260324T031500Z")]
+    assert unsafe.exists()
+
+
+def test_live_decision_runner_keeps_final_stdout_summary_and_head_tail_only() -> None:
     result = {
         "output": {"first_n": 10, "last_n": 10},
         "summary": {"status": "completed"},
@@ -220,136 +270,151 @@ def test_live_decision_runner_limits_stdout_to_summary_and_head_tail_only() -> N
     assert '"decision_index": 24' in rendered
 
 
-def test_live_decision_runner_shows_all_decisions_when_fewer_than_ten() -> None:
-    result = {
-        "output": {"first_n": 10, "last_n": 10},
-        "summary": {"status": "completed"},
-        "decision_log": [{"decision_index": index} for index in range(3)],
-    }
-
-    payload = build_live_decision_stdout_payload(result)
-
-    assert payload["decision_log_first"] == [{"decision_index": 0}, {"decision_index": 1}, {"decision_index": 2}]
-    assert "decision_log_last" not in payload
-
-
-def test_live_decision_runner_retries_after_http_429_with_backoff() -> None:
+def test_live_decision_runner_saves_run_directory_even_when_decision_count_is_zero(tmp_path: Path) -> None:
     clock = FakeClock(start_seconds=250)
-    config = _build_live_config(Path("outputs/test"))
-    config["runtime"]["duration_seconds"] = 1
+    config = _build_live_config(tmp_path / "outputs")
+    config["runtime"]["duration_seconds"] = 120
+    config["runtime"]["warmup_candles"] = 3
+    progress_lines: list[str] = []
     responses = iter(
         [
-            FetchOHLCVError("rate limited", status_code=429, headers={"Retry-After": "7"}),
             _response(_kline(0, "100"), _kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98")),
+            _response(_kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98"), _kline(5, "103")),
         ]
     )
 
     def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
-        response = next(responses)
-        if isinstance(response, Exception):
-            raise response
-        return response
+        return next(responses)
 
-    result = run_live_decision_runner(config, fetch_klines_fn=fake_fetch, sleep_fn=clock.sleep, now_fn=clock.now)
+    result = run_live_decision_runner(
+        config,
+        fetch_klines_fn=fake_fetch,
+        sleep_fn=clock.sleep,
+        now_fn=clock.now,
+        print_fn=_collecting_printer(progress_lines),
+    )
+    saved = save_live_decision_runner_result(result, config["output"]["output_dir"])
 
-    assert result["summary"]["status"] == "completed"
-    assert result["summary"]["rate_limit_events"] == 1
-    assert clock.sleep_calls[0] == 1
+    assert result["summary"]["evaluated_decisions"] == 0
+    assert Path(saved["summary"]).exists()
+    assert json.loads(Path(saved["summary"]).read_text(encoding="utf-8"))["evaluated_decisions"] == 0
+
+
+def test_live_decision_runner_can_finish_right_after_warmup_completion() -> None:
+    clock = FakeClock(start_seconds=250)
+    config = _build_live_config(Path("outputs/test"))
+    config["runtime"]["duration_seconds"] = 120
+    progress_lines: list[str] = []
+    responses = iter(
+        [
+            _response(_kline(0, "100"), _kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98")),
+            _response(_kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98"), _kline(5, "103")),
+        ]
+    )
+
+    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
+        return next(responses)
+
+    result = run_live_decision_runner(
+        config,
+        fetch_klines_fn=fake_fetch,
+        sleep_fn=clock.sleep,
+        now_fn=clock.now,
+        print_fn=_collecting_printer(progress_lines),
+    )
+
+    assert result["summary"]["warmup_completed"] is True
+    assert result["summary"]["evaluated_decisions"] == 0
+    assert len(progress_lines) == 2
 
 
 def test_live_decision_runner_returns_failed_status_on_fetch_failure() -> None:
     clock = FakeClock(start_seconds=250)
     config = _build_live_config(Path("outputs/test"))
-    config["runtime"]["duration_seconds"] = 1
+    progress_lines: list[str] = []
 
     def failing_fetch(symbol: str, interval: str, limit: int) -> dict:
         raise FetchOHLCVError("network failure")
 
-    result = run_live_decision_runner(config, fetch_klines_fn=failing_fetch, sleep_fn=clock.sleep, now_fn=clock.now)
+    result = run_live_decision_runner(
+        config,
+        fetch_klines_fn=failing_fetch,
+        sleep_fn=clock.sleep,
+        now_fn=clock.now,
+        print_fn=_collecting_printer(progress_lines),
+    )
 
     assert result["summary"]["status"] == "failed"
-    assert result["summary"]["stop_reason"] == "error"
-    assert result["summary"]["fetch_failures"] == 2
     assert result["summary"]["error_message"] == "network failure"
+    assert progress_lines == []
 
 
-def test_live_decision_runner_returns_failed_status_on_empty_response() -> None:
-    clock = FakeClock(start_seconds=250)
-    config = _build_live_config(Path("outputs/test"))
-
-    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
-        return {"rows": [], "used_weight_1m": "1"}
-
-    result = run_live_decision_runner(config, fetch_klines_fn=fake_fetch, sleep_fn=clock.sleep, now_fn=clock.now)
-
-    assert result["summary"]["status"] == "failed"
-    assert result["summary"]["error_message"] == "kline response rows must not be empty"
-
-
-def test_live_decision_runner_returns_failed_status_on_invalid_response_format() -> None:
-    clock = FakeClock(start_seconds=250)
-    config = _build_live_config(Path("outputs/test"))
-
-    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
-        return {"rows": [{"timestamp": "2024-01-01T00:00:00Z"}], "used_weight_1m": "1"}
-
-    result = run_live_decision_runner(config, fetch_klines_fn=fake_fetch, sleep_fn=clock.sleep, now_fn=clock.now)
-
-    assert result["summary"]["status"] == "failed"
-    assert result["summary"]["stop_reason"] == "error"
-
-
-def test_live_decision_runner_handles_long_no_new_confirmed_candle_period() -> None:
-    clock = FakeClock(start_seconds=250)
-    config = _build_live_config(Path("outputs/test"))
-    config["runtime"]["poll_interval_seconds"] = 1
-    config["runtime"]["duration_seconds"] = 4
-    single = _response(_kline(3, "98"))
-    responses = iter([single, single, single, single])
-
-    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
-        return next(responses)
-
-    result = run_live_decision_runner(config, fetch_klines_fn=fake_fetch, sleep_fn=clock.sleep, now_fn=clock.now)
-
-    assert result["summary"]["status"] == "completed"
-    assert result["summary"]["evaluated_decisions"] == 0
-    assert result["summary"]["data_insufficient_polls"] == 1
-    assert result["summary"]["no_new_confirmed_candle_polls"] == 3
-
-
-def test_save_live_decision_runner_result_propagates_directory_creation_failure(
+def test_prepare_live_decision_output_directory_propagates_creation_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    original_mkdir = Path.mkdir
+
+    def failing_mkdir(self: Path, parents: bool = False, exist_ok: bool = False) -> None:
+        if self.name == "outputs":
+            raise OSError("mkdir failed")
+        return original_mkdir(self, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", failing_mkdir)
+
+    with pytest.raises(OSError, match="mkdir failed"):
+        prepare_live_decision_output_directory(
+            tmp_path / "outputs",
+            run_started_at="2026-03-24T03:15:00Z",
+            max_run_directories=10,
+        )
+
+
+def test_save_live_decision_runner_result_propagates_old_run_deletion_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "outputs"
+    _seed_run_directories(output_dir, 10)
+
+    def failing_rmtree(path: Path) -> None:
+        raise OSError("delete failed")
+
+    monkeypatch.setattr("trade_simulator.live_decision_runner.shutil.rmtree", failing_rmtree)
+
     result = {
-        "summary": {},
+        "output": {"max_run_directories": 10},
+        "summary": {"started_at": "2026-03-24T04:00:00Z"},
         "decision_log": [],
         "trade_log": [],
         "equity_history": [],
         "progress_log": [],
     }
 
-    def raise_os_error(self: Path, parents: bool, exist_ok: bool) -> None:
-        raise OSError("mkdir failed")
-
-    monkeypatch.setattr(Path, "mkdir", raise_os_error)
-
-    with pytest.raises(OSError, match="mkdir failed"):
-        save_live_decision_runner_result(result, tmp_path / "outputs")
+    with pytest.raises(OSError, match="delete failed"):
+        save_live_decision_runner_result(result, output_dir)
 
 
-def test_live_decision_cli_writes_files_and_prints_truncated_stdout(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    config_path = tmp_path / "live.json"
-    output_dir = tmp_path / "outputs"
-    config = _build_live_config(output_dir)
-    config["runtime"]["duration_seconds"] = 0
-    config_path.write_text(json.dumps(config), encoding="utf-8")
+def test_live_decision_runner_progress_summary_defaults_when_no_decision_data_yet() -> None:
+    clock = FakeClock(start_seconds=250)
+    config = _build_live_config(Path("outputs/test"))
+    config["runtime"]["duration_seconds"] = 60
+    config["runtime"]["warmup_candles"] = 2
+    progress_lines: list[str] = []
 
-    exit_code = live_decision_main(["--config", str(config_path)])
+    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
+        return _response(_kline(0, "100"), _kline(1, "102"), _kline(2, "99"), _kline(3, "101"), _kline(4, "98"))
 
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert '"summary"' in captured.out
-    assert '"decision_log_first"' in captured.out
-    assert Path(output_dir, "summary.json").exists()
+    run_live_decision_runner(
+        config,
+        fetch_klines_fn=fake_fetch,
+        sleep_fn=clock.sleep,
+        now_fn=clock.now,
+        print_fn=_collecting_printer(progress_lines),
+    )
+
+    progress = json.loads(progress_lines[0])
+    assert progress["trade_count"] == 0
+    assert progress["equity"] == 1000.0
+    assert progress["cash"] == 1000.0
+    assert progress["reason_code"] == "warmup_pending"

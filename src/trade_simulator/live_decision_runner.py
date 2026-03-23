@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
+import shutil
 import time
 import urllib.error
 import urllib.parse
@@ -21,6 +23,7 @@ from trade_simulator.simulation import simulate
 
 
 BINANCE_SPOT_KLINES_URL = "https://api.binance.com/api/v3/klines"
+RUN_DIRECTORY_NAME_PATTERN = re.compile(r"^\d{8}T\d{6}Z$")
 
 
 class LiveDecisionRunnerError(Exception):
@@ -93,11 +96,16 @@ def load_live_decision_runner_config(config: object) -> dict:
         "duration_seconds",
     )
     runtime["emit_progress_log"] = _validate_bool(runtime.get("emit_progress_log", True), "emit_progress_log")
+    runtime["warmup_candles"] = _validate_positive_int(runtime.get("warmup_candles", 1), "warmup_candles")
 
     if "output_dir" not in output:
         raise ValueError("output must include output_dir")
     output["first_n"] = _validate_positive_int(output.get("first_n", 10), "first_n")
     output["last_n"] = _validate_positive_int(output.get("last_n", 10), "last_n")
+    output["max_run_directories"] = _validate_positive_int(
+        output.get("max_run_directories", 10),
+        "max_run_directories",
+    )
 
     retry["max_attempts"] = _validate_positive_int(retry.get("max_attempts", 2), "max_attempts")
     retry["initial_backoff_seconds"] = _validate_non_negative_number(
@@ -128,6 +136,11 @@ def _utc_now_iso(now_fn: Callable[[], float]) -> str:
 
 def _timestamp_from_milliseconds(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _run_id_from_iso8601(timestamp: str) -> str:
+    parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    return parsed.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _parse_retry_after_seconds(headers: dict[str, str]) -> float | None:
@@ -327,6 +340,48 @@ def _build_progress_entry(
     return entry
 
 
+def _derive_cash_value(latest_result: dict | None, initial_cash: float) -> float:
+    if latest_result is None:
+        return initial_cash
+
+    position = latest_result.get("position", [])
+    is_in_position = bool(position and position[-1])
+    if is_in_position:
+        return 0.0
+    return float(latest_result["final_value"])
+
+
+def build_live_progress_stdout_payload(
+    *,
+    poll_index: int,
+    fetched_at: str,
+    latest_result: dict | None,
+    initial_cash: float,
+    reason_code: str,
+    last_confirmed_timestamp: str | None,
+) -> dict:
+    trade_count = 0
+    equity = float(initial_cash)
+    if latest_result is not None:
+        trade_count = int(latest_result["trade_count"])
+        equity = float(latest_result["final_value"])
+
+    return {
+        "type": "live_progress",
+        "poll_index": poll_index,
+        "fetched_at": fetched_at,
+        "reason_code": reason_code,
+        "trade_count": trade_count,
+        "equity": equity,
+        "cash": _derive_cash_value(latest_result, float(initial_cash)),
+        "last_confirmed_timestamp": last_confirmed_timestamp,
+    }
+
+
+def format_live_progress_stdout(payload: dict) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def _append_decision_entries(
     *,
     strategy_config: dict,
@@ -464,6 +519,7 @@ def _build_runtime_payload(
     poll_count: int,
     counters: dict,
     error_message: str | None,
+    run_context: dict | None,
 ) -> dict:
     strategy_config = config["strategy"]
     data_source = config["data_source"]
@@ -490,6 +546,8 @@ def _build_runtime_payload(
         realized_pnl_total = latest_result["realized_pnl_total"]
         open_position_at_end = bool(latest_result["position"] and latest_result["position"][-1])
 
+    final_cash = _derive_cash_value(latest_result, float(strategy_config["initial_cash"]))
+
     summary = {
         "simulation_name": strategy_config.get("simulation_name", strategy_config.get("name", "live_decision_runner")),
         "runner_name": "live_decision_runner",
@@ -502,10 +560,17 @@ def _build_runtime_payload(
         "duration_seconds": config["runtime"]["duration_seconds"],
         "configured_fetch_limit": data_source["limit"],
         "output_dir": output["output_dir"],
+        "run_id": None,
+        "run_directory": None,
+        "max_run_directories": output["max_run_directories"],
         "started_at": started_at,
         "ended_at": ended_at,
         "poll_count": poll_count,
         "evaluated_decisions": len(decision_log),
+        "warmup_candles": config["runtime"]["warmup_candles"],
+        "observed_confirmed_candles": counters["observed_confirmed_candles"],
+        "warmup_completed": counters["observed_confirmed_candles"] >= config["runtime"]["warmup_candles"],
+        "warmup_completed_timestamp": counters["warmup_completed_timestamp"],
         "no_new_confirmed_candle_polls": counters["no_new_confirmed_candle_polls"],
         "data_insufficient_polls": counters["data_insufficient_polls"],
         "fetch_failures": counters["fetch_failures"],
@@ -519,7 +584,12 @@ def _build_runtime_payload(
         "losing_trades": losing_trades,
         "realized_pnl_total": realized_pnl_total,
         "open_position_at_end": open_position_at_end,
+        "final_cash": final_cash,
     }
+
+    if run_context is not None:
+        summary["run_id"] = run_context["run_id"]
+        summary["run_directory"] = run_context["run_directory"]
 
     return {
         "data_source": data_source,
@@ -544,6 +614,7 @@ def run_live_decision_runner(
     sleep_fn: Callable[[float], None] | None = None,
     now_fn: Callable[[], float] | None = None,
     stop_requested_fn: Callable[[], bool] | None = None,
+    print_fn: Callable[[str], None] | None = None,
 ) -> dict:
     validated_config = load_live_decision_runner_config(config)
 
@@ -555,6 +626,8 @@ def run_live_decision_runner(
         now_fn = time.time
     if stop_requested_fn is None:
         stop_requested_fn = lambda: False
+    if print_fn is None:
+        print_fn = print
 
     data_source = validated_config["data_source"]
     runtime = validated_config["runtime"]
@@ -570,6 +643,8 @@ def run_live_decision_runner(
         "rate_limit_events": 0,
         "no_new_confirmed_candle_polls": 0,
         "data_insufficient_polls": 0,
+        "observed_confirmed_candles": 0,
+        "warmup_completed_timestamp": None,
         "latest_used_weight_1m": None,
     }
 
@@ -616,9 +691,11 @@ def run_live_decision_runner(
             current_now_ms = int(now_fn() * 1000)
             latest_confirmed_rows = _select_confirmed_rows(raw_rows, current_now_ms)
             latest_weight_1m = response.get("used_weight_1m")
+            progress_reason_code = "no_new_confirmed_candle"
 
             if not latest_confirmed_rows:
                 counters["data_insufficient_polls"] += 1
+                progress_reason_code = "no_confirmed_candle_available"
                 if runtime["emit_progress_log"]:
                     progress_log.append(
                         _build_progress_entry(
@@ -635,9 +712,30 @@ def run_live_decision_runner(
                 if last_confirmed_timestamp is None:
                     confirmed_rows = list(latest_confirmed_rows)
                     last_confirmed_timestamp = newest_timestamp
+                    counters["observed_confirmed_candles"] += 1
+                    if counters["observed_confirmed_candles"] == runtime["warmup_candles"]:
+                        counters["warmup_completed_timestamp"] = last_confirmed_timestamp
 
-                    if len(confirmed_rows) < 2:
+                    if counters["observed_confirmed_candles"] <= runtime["warmup_candles"]:
+                        progress_reason_code = "warmup_pending"
+                        if runtime["emit_progress_log"]:
+                            progress_log.append(
+                                _build_progress_entry(
+                                    poll_index=poll_index,
+                                    fetched_at=fetched_at,
+                                    reason_code="warmup_pending",
+                                    confirmed_rows=len(confirmed_rows),
+                                    last_confirmed_timestamp=last_confirmed_timestamp,
+                                    used_weight_1m=latest_weight_1m,
+                                    detail=(
+                                        f"observed {counters['observed_confirmed_candles']} of "
+                                        f"{runtime['warmup_candles']} warmup candles"
+                                    ),
+                                )
+                            )
+                    elif len(confirmed_rows) < 2:
                         counters["data_insufficient_polls"] += 1
+                        progress_reason_code = "waiting_for_second_confirmed_candle"
                         if runtime["emit_progress_log"]:
                             progress_log.append(
                                 _build_progress_entry(
@@ -650,6 +748,7 @@ def run_live_decision_runner(
                                 )
                             )
                     else:
+                        progress_reason_code = "decision_evaluated"
                         latest_result = _append_decision_entries(
                             strategy_config=validated_config["strategy"],
                             confirmed_rows=confirmed_rows,
@@ -663,6 +762,7 @@ def run_live_decision_runner(
                         trade_log = latest_result["trade_log"]
                 elif newest_timestamp <= last_confirmed_timestamp:
                     counters["no_new_confirmed_candle_polls"] += 1
+                    progress_reason_code = "no_new_confirmed_candle"
                     if runtime["emit_progress_log"]:
                         progress_log.append(
                             _build_progress_entry(
@@ -680,9 +780,32 @@ def run_live_decision_runner(
                     for row in new_rows:
                         confirmed_rows.append(row)
                         last_confirmed_timestamp = row["timestamp"]
+                        counters["observed_confirmed_candles"] += 1
+                        if counters["observed_confirmed_candles"] == runtime["warmup_candles"]:
+                            counters["warmup_completed_timestamp"] = last_confirmed_timestamp
+
+                        if counters["observed_confirmed_candles"] <= runtime["warmup_candles"]:
+                            progress_reason_code = "warmup_pending"
+                            if runtime["emit_progress_log"]:
+                                progress_log.append(
+                                    _build_progress_entry(
+                                        poll_index=poll_index,
+                                        fetched_at=fetched_at,
+                                        reason_code="warmup_pending",
+                                        confirmed_rows=len(confirmed_rows),
+                                        last_confirmed_timestamp=last_confirmed_timestamp,
+                                        used_weight_1m=latest_weight_1m,
+                                        detail=(
+                                            f"observed {counters['observed_confirmed_candles']} of "
+                                            f"{runtime['warmup_candles']} warmup candles"
+                                        ),
+                                    )
+                                )
+                            continue
 
                         if len(confirmed_rows) < 2:
                             counters["data_insufficient_polls"] += 1
+                            progress_reason_code = "waiting_for_second_confirmed_candle"
                             if runtime["emit_progress_log"]:
                                 progress_log.append(
                                     _build_progress_entry(
@@ -696,6 +819,7 @@ def run_live_decision_runner(
                                 )
                             continue
 
+                        progress_reason_code = "decision_evaluated"
                         latest_result = _append_decision_entries(
                             strategy_config=validated_config["strategy"],
                             confirmed_rows=confirmed_rows,
@@ -707,6 +831,19 @@ def run_live_decision_runner(
                             latest_weight_1m=latest_weight_1m,
                         )
                         trade_log = latest_result["trade_log"]
+
+            print_fn(
+                format_live_progress_stdout(
+                    build_live_progress_stdout_payload(
+                        poll_index=poll_index,
+                        fetched_at=fetched_at,
+                        latest_result=latest_result,
+                        initial_cash=float(validated_config["strategy"]["initial_cash"]),
+                        reason_code=progress_reason_code,
+                        last_confirmed_timestamp=last_confirmed_timestamp,
+                    )
+                )
+            )
 
             remaining_seconds = runtime["duration_seconds"] - (now_fn() - started_at_seconds)
             if remaining_seconds <= 0:
@@ -739,21 +876,93 @@ def run_live_decision_runner(
         poll_count=poll_index,
         counters=counters,
         error_message=error_message,
+        run_context=None,
     )
     payload["trade_log"] = trade_log
     return payload
 
 
-def save_live_decision_runner_result(result: dict, output_dir: str | Path) -> dict:
+def _list_safe_run_directories(output_dir: str | Path) -> list[Path]:
+    output_path = Path(output_dir)
+    if not output_path.exists():
+        return []
+
+    resolved_output_path = output_path.resolve()
+    run_directories = []
+    for candidate in output_path.iterdir():
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        if not RUN_DIRECTORY_NAME_PATTERN.match(candidate.name):
+            continue
+        try:
+            resolved_candidate = candidate.resolve()
+        except OSError:
+            continue
+        if resolved_candidate.parent != resolved_output_path:
+            continue
+        run_directories.append(candidate)
+
+    run_directories.sort(key=lambda path: path.name)
+    return run_directories
+
+
+def prune_live_decision_run_directories(output_dir: str | Path, max_run_directories: int) -> list[str]:
+    removed_directories: list[str] = []
+    run_directories = _list_safe_run_directories(output_dir)
+    removable_count = max(0, len(run_directories) - max_run_directories + 1)
+
+    for path in run_directories[:removable_count]:
+        shutil.rmtree(path)
+        removed_directories.append(str(path))
+
+    return removed_directories
+
+
+def prepare_live_decision_output_directory(
+    output_dir: str | Path,
+    *,
+    run_started_at: str,
+    max_run_directories: int,
+) -> dict:
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    removed_directories = prune_live_decision_run_directories(output_path, max_run_directories)
+    run_id = _run_id_from_iso8601(run_started_at)
+    run_directory = output_path / run_id
+    run_directory.mkdir()
+    return {
+        "run_id": run_id,
+        "run_directory": str(run_directory),
+        "removed_directories": removed_directories,
+    }
+
+
+def save_live_decision_runner_result(
+    result: dict,
+    output_dir: str | Path,
+    *,
+    run_context: dict | None = None,
+) -> dict:
+    output_path = Path(output_dir)
+    max_run_directories = int(result.get("output", {}).get("max_run_directories", 10))
+
+    if run_context is None:
+        run_context = prepare_live_decision_output_directory(
+            output_path,
+            run_started_at=result["summary"]["started_at"],
+            max_run_directories=max_run_directories,
+        )
+
+    result["summary"]["run_id"] = run_context["run_id"]
+    result["summary"]["run_directory"] = run_context["run_directory"]
+    result["summary"]["removed_run_directories"] = list(run_context.get("removed_directories", []))
 
     file_map = {
-        "summary": output_path / "summary.json",
-        "decision_log": output_path / "decision_log.json",
-        "trade_log": output_path / "trade_log.json",
-        "equity_history": output_path / "equity_history.json",
-        "progress_log": output_path / "progress_log.json",
+        "summary": Path(run_context["run_directory"]) / "summary.json",
+        "decision_log": Path(run_context["run_directory"]) / "decision_log.json",
+        "trade_log": Path(run_context["run_directory"]) / "trade_log.json",
+        "equity_history": Path(run_context["run_directory"]) / "equity_history.json",
+        "progress_log": Path(run_context["run_directory"]) / "progress_log.json",
     }
 
     for key, path in file_map.items():

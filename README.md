@@ -161,10 +161,17 @@ decision log の理由コードは以下の2系統に分けます。
 リアルタイム判定ランナーは Binance Spot REST `/api/v3/klines` を一定間隔で poll し、1 分足の確定足だけで戦略判断を継続する外側レイヤです。
 注文送信や実売買は行わず、`OHLCV -> returns -> signals -> simulate` の責務分離を維持します。
 
-初回 poll では直近の confirmed OHLCV を履歴コンテキストとして取り込み、その時点の最新確定足を 1 回だけ評価します。
+live runner は起動直後には判断せず、`warmup_candles` 分の confirmed candle を観測だけ行ってから初回判断を開始します。
+warmup 中の candle は売買判断には使いませんが、履歴コンテキストとしては保持し、warmup 完了後の初回判断はその時点で利用可能な confirmed candle 全体を文脈にして行います。
 以後は `last_confirmed_timestamp` を保持し、同一 timestamp の足では再判断せず、新しく確定した 1 分足だけを順次評価します。
 
-標準出力は `summary` と `decision_log` の先頭 / 末尾の一部だけに制限し、全量ログは `output_dir` 配下の JSON ファイルに保存します。
+標準出力は実行中には 1 分ごとの progress summary を短い JSON で出し、終了時には `summary` と `decision_log` の先頭 / 末尾の一部だけを表示します。
+progress summary には最低限 `trade_count`、`equity`、`cash` を含め、全量ログは stdout に戻しません。
+
+保存先は `output_dir/<run_id>/` 形式の run directory で実行ごとに分離します。
+既定では run directory を最大 10 件保持し、超過時は最も古い run directory から削除します。
+
+標準出力の full history 抑制方針は維持し、詳細は run directory 配下の JSON ファイルで確認します。
 429 受信時は最小限の retry / backoff を行い、`X-MBX-USED-WEIGHT-1M` が返る場合は decision / progress 文脈と summary に残します。
 
 ## ディレクトリ方針
