@@ -169,6 +169,13 @@ Hacker News 側の割り切り:
 - save: 正規化後 bundle と観測 summary のみ保存
 - observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、source/group/group_theme/publisher_type/channel/symbol/topic 分布、mention_count 要約、timestamp 分布、warning、error を集計
 
+summary 構造の整理:
+
+- 共通 observation はトップレベルに置く
+- source 固有 observation は `source_specific` にもまとめる
+- 既存の利用互換のため、すでにトップレベルに出している source 固有項目は当面維持する
+- 新規 source を追加する場合は、まず `source_specific` に source 固有項目を入れる前提で拡張する
+
 source ごとの切り分け:
 
 - 共通: fetch、保存、run_id 生成、observation 集計
@@ -185,6 +192,14 @@ adapter 境界:
 - YouTube の `published` 正規化、group/channel metadata 付与、topic/symbol 推定、簡易 score 生成も adapter 側で吸収する
 - Hacker News の `time` 正規化、`score` / `descendants` / `story_type` の写像、topic/symbol 推定も adapter 側で吸収する
 - collector 側は source registry を見て adapter を呼び、共通保存と observation 集計だけを担当する
+
+topic / symbol 推定ルールの整理:
+
+- Reddit: `infer_reddit_symbol_topic`
+- YouTube: `infer_youtube_symbol_topic`
+- Hacker News: `infer_hacker_news_symbol_topic`
+- いずれも [src/trade_simulator/sns_adapters.py](/home/kuru0101/crypto_simulator/crypto_simulator/src/trade_simulator/sns_adapters.py) に置き、source ごとの adapter から呼ぶ
+- 共通 normalize 層には source 固有ヒューリスティクスを持ち込まない
 
 dedup key の生成規則:
 
@@ -242,6 +257,15 @@ dedup key の生成規則:
 - `warnings`
 - `errors`
 - `saved_paths`
+- `source_specific`
+
+mention_count の意味:
+
+- Reddit: `num_comments`
+- YouTube: upload 1件を 1 として固定
+- Hacker News: `descendants`
+
+この差分は record `metadata.mention_count_semantics` と summary `source_specific.mention_count_semantics` で追えるようにしています。
 
 source 増加で見えた制約:
 

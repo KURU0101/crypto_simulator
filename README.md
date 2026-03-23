@@ -237,6 +237,8 @@ YouTube 側の最小 collector は `youtube_channel_rss` をサポートし、�
 
 Hacker News 側の最小 collector は `hacker_news_public_api` をサポートし、`topstories` などの一覧 ID を取得してから `item/{id}` を最小件数だけ引き、1件 = 1 signal で正規化します。record には `score` / `descendants` / `story_type` / `url` / `id` を `metadata` に残し、summary では `score_summary` / `comment_count_summary` / `story_type_distribution` を観測できます。
 
+SNS summary は、共通項目をトップレベルに維持しつつ、source 固有観測を `source_specific` にもまとめます。`mention_count` の意味は source ごとに異なり、Reddit は `num_comments`、YouTube は `1動画=1`、Hacker News は `descendants` を使います。topic / symbol 推定ルールは共通 normalize ではなく source ごとの adapter 側に寄せています。
+
 サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
 設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。
 

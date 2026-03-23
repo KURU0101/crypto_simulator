@@ -45,6 +45,31 @@ _NEGATIVE_KEYWORDS = (
     "red",
 )
 
+_REDDIT_KEYWORD_RULES = (
+    ("BTCUSDT", "bitcoin", ("bitcoin",), (" btc ",)),
+    ("ETHUSDT", "ethereum", ("ethereum",), (" ether ", " eth ")),
+    ("SOLUSDT", "solana", ("solana",), (" sol ",)),
+    (None, "crypto macro", ("macro", "fed", "fomc"), ()),
+    (None, "stablecoins", ("stablecoin",), ()),
+    (None, "crypto regulation", ("regulation", "sec"), ()),
+)
+_YOUTUBE_KEYWORD_RULES = (
+    ("BTCUSDT", "bitcoin", ("bitcoin",), (" btc ",)),
+    ("ETHUSDT", "ethereum", ("ethereum",), (" ether ", " eth ")),
+    ("SOLUSDT", "solana", ("solana",), (" sol ",)),
+    (None, "artificial intelligence", ("artificial intelligence",), (" ai ",)),
+    (None, "cloud infrastructure", ("cloud",), ()),
+    (None, "crypto regulation", ("regulation", "policy"), ()),
+)
+_HACKER_NEWS_KEYWORD_RULES = (
+    ("BTCUSDT", "bitcoin", ("bitcoin",), (" btc ",)),
+    ("ETHUSDT", "ethereum", ("ethereum",), (" ether ", " eth ")),
+    ("SOLUSDT", "solana", ("solana",), (" sol ",)),
+    (None, "artificial intelligence", ("artificial intelligence",), (" ai ",)),
+    (None, "cloud infrastructure", ("cloud",), ()),
+    (None, "crypto regulation", ("regulation", "sec"), ()),
+)
+
 
 def _require_text(item: dict, field_name: str, *, prefix: str) -> str:
     value = item.get(field_name)
@@ -94,34 +119,50 @@ def _score_text_sentiment(text: str) -> tuple[float, float, float]:
     return (0.2, 0.2, 0.6)
 
 
-def _classify_symbol_and_topic(text: str, *, fallback_topic: str) -> dict:
+def _infer_symbol_topic_from_keyword_rules(
+    text: str,
+    *,
+    fallback_topic: str,
+    keyword_rules: tuple[tuple[str | None, str, tuple[str, ...], tuple[str, ...]], ...],
+) -> dict:
     lowered = text.lower()
     padded = f" {lowered} "
-    if "bitcoin" in lowered or " btc " in padded:
-        return {"symbol": "BTCUSDT", "topic": "bitcoin"}
-    if "ethereum" in lowered or " ether " in padded or " eth " in padded:
-        return {"symbol": "ETHUSDT", "topic": "ethereum"}
-    if "solana" in lowered or " sol " in padded:
-        return {"symbol": "SOLUSDT", "topic": "solana"}
-    if "macro" in lowered or "fed" in lowered or "fomc" in lowered:
-        return {"symbol": None, "topic": "crypto macro"}
-    if "stablecoin" in lowered:
-        return {"symbol": None, "topic": "stablecoins"}
-    if "regulation" in lowered or "sec" in lowered:
-        return {"symbol": None, "topic": "crypto regulation"}
-    if "ai" in padded or "artificial intelligence" in lowered:
-        return {"symbol": None, "topic": "artificial intelligence"}
-    if "cloud" in lowered:
-        return {"symbol": None, "topic": "cloud infrastructure"}
+    for symbol, topic, plain_keywords, padded_keywords in keyword_rules:
+        if any(keyword in lowered for keyword in plain_keywords) or any(keyword in padded for keyword in padded_keywords):
+            return {"symbol": symbol, "topic": topic}
     return {"symbol": None, "topic": fallback_topic}
 
 
-def _classify_reddit_post(title: str, selftext: str, subreddit: str, link_flair_text: str | None) -> dict:
+def infer_reddit_symbol_topic(title: str, selftext: str, subreddit: str, link_flair_text: str | None) -> dict:
     text = " ".join(
         part for part in (title.lower(), selftext.lower(), subreddit.lower(), (link_flair_text or "").lower()) if part
     )
     normalized_subreddit = subreddit.replace("_", " ").strip().lower() or "crypto discussion"
-    return _classify_symbol_and_topic(text, fallback_topic=normalized_subreddit)
+    return _infer_symbol_topic_from_keyword_rules(text, fallback_topic=normalized_subreddit, keyword_rules=_REDDIT_KEYWORD_RULES)
+
+
+def infer_youtube_symbol_topic(title: str, channel_label: str, group_label: str, group_theme: str, theme_tags: list[str]) -> dict:
+    classifier_text = " ".join([title, channel_label, group_label, group_theme])
+    fallback_topic = theme_tags[0] if theme_tags else group_theme
+    return _infer_symbol_topic_from_keyword_rules(
+        classifier_text,
+        fallback_topic=fallback_topic,
+        keyword_rules=_YOUTUBE_KEYWORD_RULES,
+    )
+
+
+def infer_hacker_news_symbol_topic(title: str, url: str | None, text: str | None, story_type: str) -> dict:
+    classifier_text = " ".join(part for part in (title, url or "", text or "", story_type) if part)
+    fallback_topic = "technology discussion"
+    if story_type == "job":
+        fallback_topic = "technology hiring"
+    elif story_type == "poll":
+        fallback_topic = "technology poll"
+    return _infer_symbol_topic_from_keyword_rules(
+        classifier_text,
+        fallback_topic=fallback_topic,
+        keyword_rules=_HACKER_NEWS_KEYWORD_RULES,
+    )
 
 
 def _score_reddit_activity(score: int, num_comments: int) -> float:
@@ -154,7 +195,7 @@ def adapt_reddit_post(item: dict, *, fetched_at: str, listing_url: str) -> dict:
         else None
     )
 
-    classification = _classify_reddit_post(title, selftext, subreddit, link_flair_text)
+    classification = infer_reddit_symbol_topic(title, selftext, subreddit, link_flair_text)
     positive_score, negative_score, neutral_score = _score_text_sentiment(" ".join(part for part in (title, selftext) if part))
     entity_key = classification["symbol"] or classification["topic"]
     post_id = str(item.get("id") or "").strip() or None
@@ -189,6 +230,7 @@ def adapt_reddit_post(item: dict, *, fetched_at: str, listing_url: str) -> dict:
             "score": score if score_raw is not None else None,
             "upvote_ratio": upvote_ratio,
             "author": str(item.get("author") or "").strip() or None,
+            "mention_count_semantics": "reddit num_comments",
         },
     }
     return normalize_sns_signal_record(record, entry_name="reddit_subreddit_new_json_item")
@@ -268,17 +310,14 @@ def adapt_youtube_video(item: dict, *, fetched_at: str, channel_context: dict) -
         raise ValueError("youtube feed item channel_id does not match configured channel_id")
 
     theme_tags = [str(tag).strip() for tag in channel_context.get("theme_tags", []) if str(tag).strip()]
-    fallback_topic = theme_tags[0] if theme_tags else channel_context["group_theme"]
-    classifier_text = " ".join(
-        [
-            title,
-            channel_context["channel_label"],
-            channel_context["group_label"],
-            channel_context["group_theme"],
-        ]
+    anomaly_text = " ".join([title, channel_context["channel_label"], channel_context["group_label"], channel_context["group_theme"], " ".join(theme_tags)])
+    classification = infer_youtube_symbol_topic(
+        title,
+        channel_context["channel_label"],
+        channel_context["group_label"],
+        channel_context["group_theme"],
+        theme_tags,
     )
-    anomaly_text = " ".join([classifier_text, " ".join(theme_tags)])
-    classification = _classify_symbol_and_topic(classifier_text, fallback_topic=fallback_topic)
     positive_score, negative_score, neutral_score = _score_text_sentiment(title)
     publisher_type = channel_context["publisher_type"]
 
@@ -322,19 +361,10 @@ def adapt_youtube_video(item: dict, *, fetched_at: str, channel_context: dict) -
             "theme_tags": theme_tags,
             "feed_url": channel_context["feed_url"],
             "updated_at": item.get("updated_at"),
+            "mention_count_semantics": "youtube upload count fixed at 1 per video",
         },
     }
     return normalize_sns_signal_record(record, entry_name="youtube_channel_rss_item")
-
-
-def _classify_hacker_news_story(title: str, url: str | None, text: str | None, story_type: str) -> dict:
-    classifier_text = " ".join(part for part in (title, url or "", text or "", story_type) if part)
-    fallback_topic = "technology discussion"
-    if story_type == "job":
-        fallback_topic = "technology hiring"
-    elif story_type == "poll":
-        fallback_topic = "technology poll"
-    return _classify_symbol_and_topic(classifier_text, fallback_topic=fallback_topic)
 
 
 def _hacker_news_activity_score(score: int, descendants: int) -> float:
@@ -366,7 +396,7 @@ def adapt_hacker_news_story(item: dict, *, fetched_at: str, list_name: str, item
     text = str(item.get("text") or "").strip() or None
     author = str(item.get("by") or "").strip() or None
 
-    classification = _classify_hacker_news_story(title, url, text, story_type)
+    classification = infer_hacker_news_symbol_topic(title, url, text, story_type)
     positive_score, negative_score, neutral_score = _score_text_sentiment(" ".join(part for part in (title, text or "") if part))
     entity_key = classification["symbol"] or classification["topic"]
 
@@ -401,6 +431,7 @@ def adapt_hacker_news_story(item: dict, *, fetched_at: str, list_name: str, item
             "list_name": list_name,
             "item_url": item_url,
             "url": url,
+            "mention_count_semantics": "hacker news descendants comment count",
         },
     }
     return normalize_sns_signal_record(record, entry_name="hacker_news_public_api_item")
@@ -444,6 +475,9 @@ __all__ = [
     "build_sns_dedup_key",
     "build_hacker_news_item_url",
     "build_youtube_channel_feed_url",
+    "infer_hacker_news_symbol_topic",
+    "infer_reddit_symbol_topic",
+    "infer_youtube_symbol_topic",
     "normalize_epoch_seconds_to_utc_z",
     "parse_youtube_feed_items",
 ]

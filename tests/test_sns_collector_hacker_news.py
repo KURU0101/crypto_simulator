@@ -12,6 +12,7 @@ from trade_simulator.sns_adapters import (
     adapt_hacker_news_story,
     build_hacker_news_item_url,
     build_sns_dedup_key,
+    infer_hacker_news_symbol_topic,
 )
 from trade_simulator.sns_collector import SnsCollectorError, load_sns_collector_config, run_sns_collector
 
@@ -95,6 +96,7 @@ def test_adapt_hacker_news_story_maps_metadata_and_scores() -> None:
     assert record["topic"] == "bitcoin"
     assert record["mention_count"] == 45
     assert record["metadata"]["collector_source"] == "hacker_news_public_api"
+    assert record["metadata"]["mention_count_semantics"] == "hacker news descendants comment count"
     assert record["metadata"]["story_type"] == "story"
     assert record["dedup_key"] == build_sns_dedup_key(
         source="hacker_news",
@@ -103,6 +105,17 @@ def test_adapt_hacker_news_story_maps_metadata_and_scores() -> None:
         source_id="1001",
         permalink="https://example.com/bitcoin-startup",
     )
+
+
+def test_infer_hacker_news_symbol_topic_is_source_specific() -> None:
+    inferred = infer_hacker_news_symbol_topic(
+        "New AI compiler paper released",
+        "https://example.com/ai-compiler",
+        None,
+        "story",
+    )
+
+    assert inferred == {"symbol": None, "topic": "artificial intelligence"}
 
 
 def test_run_sns_collector_collects_hacker_news_records_and_saves_them(tmp_path: Path) -> None:
@@ -124,6 +137,8 @@ def test_run_sns_collector_collects_hacker_news_records_and_saves_them(tmp_path:
     assert observation["status"] == "completed"
     assert observation["source"] == "hacker_news_public_api"
     assert observation["story_list"] == "topstories"
+    assert observation["source_specific"]["mention_count_semantics"] == "hacker news descendants comment count"
+    assert observation["source_specific"]["story_list"] == "topstories"
     assert observation["fetched_item_count"] == 3
     assert observation["normalized_success_count"] == 3
     assert observation["saved_record_count"] == 3
@@ -240,4 +255,3 @@ def test_run_sns_collector_accepts_hacker_news_zero_score_and_zero_descendants_b
 
 def test_hacker_news_profile_is_registered() -> None:
     assert SNS_SOURCE_PROFILES["hacker_news_public_api"]["kind"] == "hacker_news"
-

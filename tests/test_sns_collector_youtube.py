@@ -10,6 +10,7 @@ from trade_simulator.sns_adapters import (
     adapt_youtube_video,
     build_sns_dedup_key,
     build_youtube_channel_feed_url,
+    infer_youtube_symbol_topic,
     parse_youtube_feed_items,
 )
 from trade_simulator.sns_collector import SnsCollectorError, load_sns_collector_config, run_sns_collector
@@ -139,6 +140,7 @@ def test_adapt_youtube_video_maps_group_and_channel_metadata() -> None:
     assert record["topic"] == "bitcoin"
     assert record["mention_count"] == 1
     assert record["metadata"]["collector_source"] == "youtube_channel_rss"
+    assert record["metadata"]["mention_count_semantics"] == "youtube upload count fixed at 1 per video"
     assert record["metadata"]["group_id"] == "markets"
     assert record["metadata"]["channel_label"] == "Alpha Channel"
     assert record["dedup_key"] == build_sns_dedup_key(
@@ -148,6 +150,18 @@ def test_adapt_youtube_video_maps_group_and_channel_metadata() -> None:
         source_id="video-alpha-1",
         permalink="https://www.youtube.com/watch?v=video-alpha-1",
     )
+
+
+def test_infer_youtube_symbol_topic_is_source_specific() -> None:
+    inferred = infer_youtube_symbol_topic(
+        "Policy launch briefing for AI systems",
+        "Beta Policy Lab",
+        "Policy",
+        "public policy and research",
+        ["policy", "research", "ai"],
+    )
+
+    assert inferred == {"symbol": None, "topic": "artificial intelligence"}
 
 
 def test_run_sns_collector_collects_multiple_youtube_channels_and_saves_them(tmp_path: Path) -> None:
@@ -170,6 +184,8 @@ def test_run_sns_collector_collects_multiple_youtube_channels_and_saves_them(tmp
     assert observation["configured_channel_count"] == 2
     assert observation["successful_channel_count"] == 2
     assert observation["failed_channel_count"] == 0
+    assert observation["source_specific"]["mention_count_semantics"] == "youtube upload count fixed at 1 per video"
+    assert observation["source_specific"]["configured_group_count"] == 2
     assert observation["fetched_item_count"] == 3
     assert observation["normalized_success_count"] == 3
     assert observation["saved_record_count"] == 3
@@ -295,4 +311,3 @@ def test_run_sns_collector_records_invalid_youtube_timestamp_as_validation_failu
 
 def test_youtube_profile_is_registered() -> None:
     assert SNS_SOURCE_PROFILES["youtube_channel_rss"]["kind"] == "youtube"
-

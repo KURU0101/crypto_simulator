@@ -175,6 +175,20 @@ def _validate_hacker_news_list_name(value: object, name: str) -> str:
     return normalized
 
 
+def _infer_mention_count_semantics(source: str, normalized_records: list[dict]) -> str | None:
+    for record in normalized_records:
+        metadata = record.get("metadata", {})
+        semantics = metadata.get("mention_count_semantics")
+        if isinstance(semantics, str) and semantics.strip():
+            return semantics.strip()
+    defaults = {
+        "reddit_subreddit_new_json": "reddit num_comments",
+        "youtube_channel_rss": "youtube upload count fixed at 1 per video",
+        "hacker_news_public_api": "hacker news descendants comment count",
+    }
+    return defaults.get(source)
+
+
 def load_sns_collector_config(config: object) -> dict:
     if not isinstance(config, dict):
         raise ValueError("sns collector config must be a dict")
@@ -263,6 +277,7 @@ def _empty_observation(*, source: str, started_at: str, listing_url: str | None 
         "warnings": [],
         "errors": [],
         "saved_paths": {},
+        "source_specific": {},
     }
     if listing_url is not None:
         observation["listing_url"] = listing_url
@@ -351,6 +366,9 @@ def _build_observation(
         "total": sum(comment_counts),
     }
 
+    source_specific = dict(source_context or {})
+    source_specific.setdefault("mention_count_semantics", _infer_mention_count_semantics(source, normalized_records))
+
     observation = {
         "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
@@ -382,6 +400,7 @@ def _build_observation(
         "warnings": warnings,
         "errors": normalized_failures,
         "saved_paths": saved_paths,
+        "source_specific": source_specific,
     }
     if source_context:
         observation.update(source_context)

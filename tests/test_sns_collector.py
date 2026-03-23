@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from trade_simulator.sns_adapters import REDDIT_SUBREDDIT_NEW_JSON_URL, adapt_reddit_post, build_sns_dedup_key
+from trade_simulator.sns_adapters import (
+    REDDIT_SUBREDDIT_NEW_JSON_URL,
+    adapt_reddit_post,
+    build_sns_dedup_key,
+    infer_reddit_symbol_topic,
+)
 from trade_simulator.sns_collector import (
     SNS_SOURCE_PROFILES,
     SnsCollectorError,
@@ -119,6 +124,7 @@ def test_adapt_reddit_post_maps_symbol_scores_and_metadata() -> None:
     assert record["mention_count"] == 12
     assert record["positive_score"] == 0.7
     assert record["metadata"]["collector_source"] == "reddit_subreddit_new_json"
+    assert record["metadata"]["mention_count_semantics"] == "reddit num_comments"
     assert record["dedup_key"] == build_sns_dedup_key(
         source="reddit",
         timestamp="2026-03-20T17:26:40Z",
@@ -126,6 +132,12 @@ def test_adapt_reddit_post_maps_symbol_scores_and_metadata() -> None:
         post_id="btc1",
         permalink="/r/CryptoCurrency/comments/btc1/bitcoin_rally/",
     )
+
+
+def test_infer_reddit_symbol_topic_is_source_specific() -> None:
+    inferred = infer_reddit_symbol_topic("Fed macro thread for crypto this week", "", "CryptoMarkets", None)
+
+    assert inferred == {"symbol": None, "topic": "crypto macro"}
 
 
 def test_run_sns_collector_collects_reddit_records_and_saves_them(tmp_path: Path) -> None:
@@ -162,6 +174,8 @@ def test_run_sns_collector_collects_reddit_records_and_saves_them(tmp_path: Path
     assert observation["topic_distribution"]["bitcoin"] == 1
     assert observation["topic_distribution"]["crypto macro"] == 1
     assert observation["mention_count_summary"] == {"min": 0, "max": 12, "average": 6.0, "total": 12}
+    assert observation["source_specific"]["mention_count_semantics"] == "reddit num_comments"
+    assert observation["source_specific"]["listing_url"] == REDDIT_SUBREDDIT_NEW_JSON_URL
     assert observation["timestamp_by_hour_utc"] == {
         "2026-03-20T17:00:00Z": 1,
         "2026-03-20T18:00:00Z": 1,
