@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from trade_simulator.signals import simulate_threshold_strategy
 from trade_simulator.simulation import simulate
 
 
@@ -16,6 +17,18 @@ def summarize_case_result(name: str, result: dict) -> dict:
     }
 
 
+def run_case(case: dict) -> dict:
+    if "entry_signals" in case and "exit_signals" in case:
+        return simulate(case)
+
+    if "entry_threshold" in case and "exit_threshold" in case:
+        return simulate_threshold_strategy(case)
+
+    raise ValueError(
+        "each comparison case must include entry_signals and exit_signals or entry_threshold and exit_threshold"
+    )
+
+
 def run_comparisons(cases: list[dict]) -> list[dict]:
     summaries = []
 
@@ -24,7 +37,7 @@ def run_comparisons(cases: list[dict]) -> list[dict]:
             raise ValueError("each comparison case must include a name")
 
         config = {key: value for key, value in case.items() if key != "name"}
-        result = simulate(config)
+        result = run_case(config)
         summaries.append(summarize_case_result(case["name"], result))
 
     return summaries

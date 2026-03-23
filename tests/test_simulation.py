@@ -3,7 +3,8 @@ import pytest
 
 from trade_simulator.comparison_cli import format_comparison_results, load_comparison_cases, main as comparison_main
 from trade_simulator.config import load_config
-from trade_simulator.comparison import run_comparisons, summarize_case_result
+from trade_simulator.comparison import run_case, run_comparisons, summarize_case_result
+from trade_simulator.signals import generate_threshold_signals, simulate_threshold_strategy
 from trade_simulator.simulation import simulate
 
 
@@ -29,16 +30,18 @@ def test_load_comparison_config() -> None:
     cases = load_config(config_path)
 
     assert len(cases) == 2
-    assert cases[0]["name"] == "zero_cost"
-    assert cases[1]["name"] == "with_cost"
+    assert cases[0]["name"] == "baseline_threshold"
+    assert cases[0]["entry_threshold"] == 0.01
+    assert cases[1]["name"] == "aggressive_threshold"
+    assert cases[1]["exit_threshold"] == -0.005
 
 
 def test_load_comparison_cases_accepts_root_list_config() -> None:
     cases = load_comparison_cases("config/comparison.example.json")
 
     assert len(cases) == 2
-    assert cases[0]["name"] == "zero_cost"
-    assert cases[1]["name"] == "with_cost"
+    assert cases[0]["name"] == "baseline_threshold"
+    assert cases[1]["name"] == "aggressive_threshold"
 
 
 def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> None:
@@ -54,8 +57,8 @@ def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> N
               "fee_rate": 0.0,
               "slippage_rate": 0.0,
               "returns": [],
-              "entry_signals": [],
-              "exit_signals": []
+              "entry_threshold": 0.01,
+              "exit_threshold": -0.01
             }
           ]
         }
@@ -73,10 +76,170 @@ def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> N
             "fee_rate": 0.0,
             "slippage_rate": 0.0,
             "returns": [],
-            "entry_signals": [],
-            "exit_signals": [],
+            "entry_threshold": 0.01,
+            "exit_threshold": -0.01,
         }
     ]
+
+
+def test_generate_threshold_signals_creates_entries_and_exits_from_returns() -> None:
+    entry_signals, exit_signals = generate_threshold_signals(
+        [0.01, 0.02, -0.01, 0.015, -0.02],
+        0.01,
+        -0.01,
+    )
+
+    assert entry_signals == [True, False, False, True, False]
+    assert exit_signals == [False, False, True, False, True]
+
+
+def test_generate_threshold_signals_does_not_reenter_before_exit() -> None:
+    entry_signals, exit_signals = generate_threshold_signals(
+        [0.02, 0.03, 0.04, -0.02],
+        0.01,
+        -0.01,
+    )
+
+    assert entry_signals == [True, False, False, False]
+    assert exit_signals == [False, False, False, True]
+
+
+def test_generate_threshold_signals_allows_reentry_after_exit() -> None:
+    entry_signals, exit_signals = generate_threshold_signals(
+        [0.01, -0.01, 0.02, -0.02],
+        0.01,
+        -0.01,
+    )
+
+    assert entry_signals == [True, False, True, False]
+    assert exit_signals == [False, True, False, True]
+
+
+def test_generate_threshold_signals_accepts_empty_returns() -> None:
+    entry_signals, exit_signals = generate_threshold_signals([], 0.01, -0.01)
+
+    assert entry_signals == []
+    assert exit_signals == []
+
+
+def test_generate_threshold_signals_handles_exact_threshold_matches() -> None:
+    entry_signals, exit_signals = generate_threshold_signals(
+        [0.01, -0.01],
+        0.01,
+        -0.01,
+    )
+
+    assert entry_signals == [True, False]
+    assert exit_signals == [False, True]
+
+
+def test_generate_threshold_signals_handles_single_period_without_exit() -> None:
+    entry_signals, exit_signals = generate_threshold_signals([0.02], 0.01, -0.01)
+
+    assert entry_signals == [True]
+    assert exit_signals == [False]
+
+
+def test_generate_threshold_signals_returns_all_false_when_thresholds_are_never_met() -> None:
+    entry_signals, exit_signals = generate_threshold_signals(
+        [0.001, -0.001, 0.0],
+        0.01,
+        -0.01,
+    )
+
+    assert entry_signals == [False, False, False]
+    assert exit_signals == [False, False, False]
+
+
+def test_generate_threshold_signals_raises_for_non_numeric_thresholds() -> None:
+    with pytest.raises(TypeError, match="entry_threshold must be a number"):
+        generate_threshold_signals([0.01], "0.01", -0.01)
+
+    with pytest.raises(TypeError, match="exit_threshold must be a number"):
+        generate_threshold_signals([0.01], 0.01, None)
+
+
+def test_generate_threshold_signals_raises_for_invalid_returns_input() -> None:
+    with pytest.raises(TypeError, match="returns must be a list"):
+        generate_threshold_signals(None, 0.01, -0.01)
+
+    with pytest.raises(TypeError, match="returns must be a list"):
+        generate_threshold_signals((0.01, -0.01), 0.01, -0.01)
+
+    with pytest.raises(TypeError, match=r"returns\[1\] must be a number"):
+        generate_threshold_signals([0.01, "bad"], 0.01, -0.01)
+
+
+def test_simulate_threshold_strategy_connects_generated_signals_to_simulation() -> None:
+    result = simulate_threshold_strategy(
+        {
+            "simulation_name": "threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.01, -0.02, 0.03, 0.01],
+            "entry_threshold": 0.01,
+            "exit_threshold": -0.01,
+        }
+    )
+
+    assert result["entry_threshold"] == 0.01
+    assert result["exit_threshold"] == -0.01
+    assert result["entry_signals"] == [True, False, True, False]
+    assert result["exit_signals"] == [False, True, False, False]
+    assert result["final_value"] == 1050.703
+    assert result["trade_count"] == 2
+    assert result["final_value"] == result["equity_curve"][-1]
+
+
+def test_simulate_threshold_strategy_handles_empty_returns() -> None:
+    result = simulate_threshold_strategy(
+        {
+            "simulation_name": "threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [],
+            "entry_threshold": 0.01,
+            "exit_threshold": -0.01,
+        }
+    )
+
+    assert result["entry_signals"] == []
+    assert result["exit_signals"] == []
+    assert result["trade_count"] == 0
+    assert result["final_value"] == 1000.0
+
+
+def test_run_case_supports_threshold_based_strategy_configs() -> None:
+    result = run_case(
+        {
+            "simulation_name": "threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.01, -0.02, 0.03, 0.01],
+            "entry_threshold": 0.01,
+            "exit_threshold": -0.01,
+        }
+    )
+
+    assert result["entry_signals"] == [True, False, True, False]
+    assert result["exit_signals"] == [False, True, False, False]
+
+
+def test_run_case_raises_when_strategy_inputs_are_missing() -> None:
+    with pytest.raises(
+        ValueError,
+        match="each comparison case must include entry_signals and exit_signals or entry_threshold and exit_threshold",
+    ):
+        run_case(
+            {
+                "simulation_name": "invalid",
+                "initial_cash": 1000,
+                "returns": [0.01],
+            }
+        )
 
 
 def test_simulate_matches_manually_verified_example_with_zero_costs() -> None:
@@ -815,6 +978,57 @@ def test_run_comparisons_handles_single_zero_summary_case() -> None:
             "average_holding_period": 0.0,
         }
     ]
+
+
+def test_run_comparisons_supports_threshold_cases_with_different_results() -> None:
+    cases = [
+        {
+            "name": "baseline_threshold",
+            "simulation_name": "baseline_threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.01, -0.02, 0.007, -0.006, 0.012, -0.011],
+            "entry_threshold": 0.01,
+            "exit_threshold": -0.01,
+        },
+        {
+            "name": "aggressive_threshold",
+            "simulation_name": "aggressive_threshold",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.01, -0.02, 0.007, -0.006, 0.012, -0.011],
+            "entry_threshold": 0.005,
+            "exit_threshold": -0.005,
+        },
+    ]
+
+    comparisons = run_comparisons(cases)
+
+    assert comparisons == [
+        {
+            "name": "baseline_threshold",
+            "final_value": 1022.12,
+            "trade_count": 2,
+            "periods_in_position": 2,
+            "winning_trades": 2,
+            "losing_trades": 0,
+            "realized_pnl_total": 22.120000000000005,
+            "average_holding_period": 1.0,
+        },
+        {
+            "name": "aggressive_threshold",
+            "final_value": 1029.27484,
+            "trade_count": 3,
+            "periods_in_position": 3,
+            "winning_trades": 3,
+            "losing_trades": 0,
+            "realized_pnl_total": 29.27484000000004,
+            "average_holding_period": 1.0,
+        },
+    ]
+    assert comparisons[0]["final_value"] != comparisons[1]["final_value"]
 
 
 def test_format_comparison_results_returns_json_with_summary_fields() -> None:

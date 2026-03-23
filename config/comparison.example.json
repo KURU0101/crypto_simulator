@@ -1,22 +1,22 @@
 [
   {
-    "name": "zero_cost",
-    "simulation_name": "example_zero_cost",
+    "name": "baseline_threshold",
+    "simulation_name": "baseline_threshold",
     "initial_cash": 1000000,
     "fee_rate": 0.0,
     "slippage_rate": 0.0,
-    "returns": [0.01, -0.02, 0.03, 0.01],
-    "entry_signals": [true, false, true, false],
-    "exit_signals": [false, true, false, false]
+    "returns": [0.01, -0.02, 0.007, -0.006, 0.012, -0.011],
+    "entry_threshold": 0.01,
+    "exit_threshold": -0.01
   },
   {
-    "name": "with_cost",
-    "simulation_name": "example_with_cost",
+    "name": "aggressive_threshold",
+    "simulation_name": "aggressive_threshold",
     "initial_cash": 1000000,
-    "fee_rate": 0.001,
-    "slippage_rate": 0.001,
-    "returns": [0.01, -0.02, 0.03, 0.01],
-    "entry_signals": [true, false, true, false],
-    "exit_signals": [false, true, false, false]
+    "fee_rate": 0.0,
+    "slippage_rate": 0.0,
+    "returns": [0.01, -0.02, 0.007, -0.006, 0.012, -0.011],
+    "entry_threshold": 0.005,
+    "exit_threshold": -0.005
   }
 ]
