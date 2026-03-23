@@ -27,6 +27,16 @@ def simulate(config: dict) -> dict:
             current_value *= 1 + period_return
         equity_curve.append(current_value)
 
+    trade_count = 0
+    was_in_position = False
+
+    for is_in_position in position:
+        if is_in_position and not was_in_position:
+            trade_count += 1
+        was_in_position = is_in_position
+
+    periods_in_position = sum(position)
+
     return {
         "simulation_name": config["simulation_name"],
         "initial_cash": initial_cash,
@@ -34,6 +44,8 @@ def simulate(config: dict) -> dict:
         "entry_signals": entry_signals,
         "exit_signals": exit_signals,
         "position": position,
+        "trade_count": trade_count,
+        "periods_in_position": periods_in_position,
         "equity_curve": equity_curve,
         "final_value": current_value,
     }
