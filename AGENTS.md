@@ -44,3 +44,8 @@
 - commit メッセージは簡潔にする（conventional commits 風）
 - main に直接 commit しない
 - push は行わない
+
+## Commit safety rules
+- git add は対象ファイルを明示して行う（`git add .` は使用しない）
+- git 操作は単一コマンドで実行し、シェルラップ（`bash -lc` など）を使用しない
+- commit 後に作業ツリーが clean でない場合は、その理由を必ず報告する
