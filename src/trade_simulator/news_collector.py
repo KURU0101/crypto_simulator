@@ -7,15 +7,17 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable
 
-from trade_simulator.news_signals import build_news_signal_bundle, normalize_news_signal_record
-
-
-COINDESK_RSS_FEED_URL = "https://www.coindesk.com/arc/outboundfeeds/rss/"
-SEC_PRESS_RELEASES_RSS_FEED_URL = "https://www.sec.gov/news/pressreleases.rss"
+from trade_simulator.news_adapters import (
+    COINDESK_RSS_FEED_URL,
+    NEWS_SOURCE_PROFILES,
+    SEC_PRESS_RELEASES_RSS_FEED_URL,
+    adapt_coindesk_rss_item,
+    adapt_sec_press_release_rss_item,
+)
+from trade_simulator.news_signals import build_news_signal_bundle
 
 
 class NewsCollectorError(Exception):
@@ -46,16 +48,6 @@ def _validate_non_empty_string(value: object, name: str) -> str:
     if not normalized:
         raise ValueError(f"{name} must be a non-empty string")
     return normalized
-
-
-def _normalize_rss_pub_date(pub_date: str) -> str:
-    try:
-        parsed = parsedate_to_datetime(pub_date)
-    except (TypeError, ValueError) as error:
-        raise ValueError("rss item pub_date is invalid") from error
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def fetch_rss_feed(
@@ -126,173 +118,6 @@ def parse_coindesk_rss_items(xml_text: str, *, max_items: int) -> list[dict]:
     return parse_rss_items(xml_text, max_items=max_items)
 
 
-def _classify_coindesk_item(title: str, categories: list[str]) -> dict:
-    lowered_title = title.lower()
-    lowered_categories = " ".join(category.lower() for category in categories)
-    text = f"{lowered_title} {lowered_categories}".strip()
-
-    if "bitcoin" in text or "btc" in text:
-        return {
-            "symbol": "BTCUSDT",
-            "asset": "BTC",
-            "topic": "bitcoin",
-            "relevance_score": 0.9,
-            "impact_score": 0.7,
-        }
-    if "ethereum" in text or "ether" in text or "eth" in text:
-        return {
-            "symbol": "ETHUSDT",
-            "asset": "ETH",
-            "topic": "ethereum",
-            "relevance_score": 0.85,
-            "impact_score": 0.65,
-        }
-
-    topic = categories[0].strip().lower() if categories else "crypto news"
-    return {
-        "symbol": None,
-        "asset": None,
-        "topic": topic,
-        "relevance_score": 0.5,
-        "impact_score": 0.4,
-    }
-
-
-def _classify_sec_press_release_item(title: str, description: str, categories: list[str]) -> dict:
-    lowered_title = title.lower()
-    lowered_description = description.lower()
-    lowered_categories = " ".join(category.lower() for category in categories)
-    text = f"{lowered_title} {lowered_description} {lowered_categories}".strip()
-
-    if "bitcoin" in text or "btc" in text:
-        return {
-            "symbol": "BTCUSDT",
-            "asset": "BTC",
-            "topic": "bitcoin regulation",
-            "relevance_score": 0.85,
-            "impact_score": 0.85,
-        }
-    if "ethereum" in text or "ether" in text or "eth" in text:
-        return {
-            "symbol": "ETHUSDT",
-            "asset": "ETH",
-            "topic": "ethereum regulation",
-            "relevance_score": 0.8,
-            "impact_score": 0.8,
-        }
-    if any(keyword in text for keyword in ("crypto", "digital asset", "blockchain", "stablecoin", "token")):
-        return {
-            "symbol": None,
-            "asset": None,
-            "topic": "crypto regulation",
-            "relevance_score": 0.75,
-            "impact_score": 0.85,
-        }
-
-    category = categories[0].strip().lower() if categories else "press release"
-    return {
-        "symbol": None,
-        "asset": None,
-        "topic": f"sec {category}",
-        "relevance_score": 0.3,
-        "impact_score": 0.4,
-    }
-
-
-def adapt_coindesk_rss_item(item: dict, *, fetched_at: str, feed_url: str) -> dict:
-    if item.get("title") is None or not str(item["title"]).strip():
-        raise ValueError("rss item title is required")
-    if item.get("link") is None or not str(item["link"]).strip():
-        raise ValueError("rss item link is required")
-    if item.get("pub_date") is None or not str(item["pub_date"]).strip():
-        raise ValueError("rss item pub_date is required")
-
-    title = str(item["title"]).strip()
-    link = str(item["link"]).strip()
-    pub_date = _normalize_rss_pub_date(str(item["pub_date"]).strip())
-    categories = [str(category).strip() for category in item.get("categories", []) if str(category).strip()]
-    classification = _classify_coindesk_item(title, categories)
-
-    category = categories[0] if categories else "news"
-    record = {
-        "source": "coindesk",
-        "symbol": classification["symbol"],
-        "asset": classification["asset"],
-        "topic": classification["topic"],
-        "published_at": pub_date,
-        "headline": title,
-        "url": link,
-        "source_id": item.get("guid"),
-        "relevance_score": classification["relevance_score"],
-        "sentiment_score": 0.0,
-        "impact_score": classification["impact_score"],
-        "category": category,
-        "metadata": {
-            "collector_source": "coindesk_rss",
-            "feed_url": feed_url,
-            "fetched_at": fetched_at,
-            "categories": categories,
-            "description": item.get("description"),
-        },
-    }
-    return normalize_news_signal_record(record, entry_name="coindesk_rss_item")
-
-
-def adapt_sec_press_release_rss_item(item: dict, *, fetched_at: str, feed_url: str) -> dict:
-    if item.get("title") is None or not str(item["title"]).strip():
-        raise ValueError("rss item title is required")
-    if item.get("link") is None or not str(item["link"]).strip():
-        raise ValueError("rss item link is required")
-    if item.get("pub_date") is None or not str(item["pub_date"]).strip():
-        raise ValueError("rss item pub_date is required")
-
-    title = str(item["title"]).strip()
-    link = str(item["link"]).strip()
-    description = str(item.get("description") or "").strip()
-    pub_date = _normalize_rss_pub_date(str(item["pub_date"]).strip())
-    categories = [str(category).strip() for category in item.get("categories", []) if str(category).strip()]
-    classification = _classify_sec_press_release_item(title, description, categories)
-
-    category = categories[0] if categories else "press release"
-    source_id = item.get("guid") or link.rstrip("/").rsplit("/", maxsplit=1)[-1]
-    record = {
-        "source": "sec",
-        "symbol": classification["symbol"],
-        "asset": classification["asset"],
-        "topic": classification["topic"],
-        "published_at": pub_date,
-        "headline": title,
-        "url": link,
-        "source_id": source_id,
-        "relevance_score": classification["relevance_score"],
-        "sentiment_score": -0.1 if classification["topic"].endswith("regulation") else 0.0,
-        "impact_score": classification["impact_score"],
-        "category": category,
-        "metadata": {
-            "collector_source": "sec_press_releases_rss",
-            "feed_url": feed_url,
-            "fetched_at": fetched_at,
-            "categories": categories,
-            "description": description or None,
-        },
-    }
-    return normalize_news_signal_record(record, entry_name="sec_press_releases_rss_item")
-
-
-NEWS_SOURCE_PROFILES = {
-    "coindesk_rss": {
-        "default_feed_url": COINDESK_RSS_FEED_URL,
-        "required_item_fields": ("title", "link", "pub_date"),
-        "adapter": adapt_coindesk_rss_item,
-    },
-    "sec_press_releases_rss": {
-        "default_feed_url": SEC_PRESS_RELEASES_RSS_FEED_URL,
-        "required_item_fields": ("title", "link", "pub_date"),
-        "adapter": adapt_sec_press_release_rss_item,
-    },
-}
-
-
 def load_news_collector_config(config: object) -> dict:
     if not isinstance(config, dict):
         raise ValueError("news collector config must be a dict")
@@ -345,6 +170,7 @@ def _empty_observation(*, source: str, feed_url: str, started_at: str) -> dict:
         "symbol_distribution": {},
         "asset_distribution": {},
         "topic_distribution": {},
+        "category_distribution": {},
         "published_at_by_date": {},
         "published_at_by_hour_utc": {},
         "warnings": [],
@@ -370,6 +196,7 @@ def _build_observation(
     symbol_distribution: dict[str, int] = {}
     asset_distribution: dict[str, int] = {}
     topic_distribution: dict[str, int] = {}
+    category_distribution: dict[str, int] = {}
     published_at_by_date: dict[str, int] = {}
     published_at_by_hour_utc: dict[str, int] = {}
 
@@ -381,6 +208,7 @@ def _build_observation(
             asset_distribution[record["asset"]] = asset_distribution.get(record["asset"], 0) + 1
         if record["topic"] is not None:
             topic_distribution[record["topic"]] = topic_distribution.get(record["topic"], 0) + 1
+        category_distribution[record["category"]] = category_distribution.get(record["category"], 0) + 1
         published_at = datetime.fromisoformat(record["published_at"].replace("Z", "+00:00"))
         day_key = published_at.strftime("%Y-%m-%d")
         hour_key = published_at.strftime("%Y-%m-%dT%H:00:00Z")
@@ -409,6 +237,7 @@ def _build_observation(
         "symbol_distribution": symbol_distribution,
         "asset_distribution": asset_distribution,
         "topic_distribution": topic_distribution,
+        "category_distribution": category_distribution,
         "published_at_by_date": published_at_by_date,
         "published_at_by_hour_utc": published_at_by_hour_utc,
         "warnings": warnings,

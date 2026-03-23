@@ -157,6 +157,7 @@ def test_normalize_news_signal_record_normalizes_fields() -> None:
     assert normalized["topic"] == "etf flows"
     assert normalized["published_at"] == "2026-03-24T01:15:00Z"
     assert normalized["category"] == "markets"
+    assert normalized["dedup_key"].startswith("coindesk:")
 
 
 def test_normalize_news_signal_record_accepts_asset_only_boundary_case() -> None:
@@ -224,6 +225,8 @@ def test_build_news_signal_bundle_groups_entities() -> None:
     )
 
     assert bundle["summary"]["record_count"] == 2
+    assert bundle["summary"]["categories"] == ["markets", "regulation"]
+    assert bundle["summary"]["unique_dedup_key_count"] == 2
     assert list(bundle["by_symbol"]) == ["BTCUSDT"]
     assert list(bundle["by_topic"]) == ["crypto regulation"]
 

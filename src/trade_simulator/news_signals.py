@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from trade_simulator.external_signal_common import (
@@ -11,6 +12,27 @@ from trade_simulator.external_signal_common import (
     normalize_timestamp_to_utc_z,
     normalize_topic,
 )
+
+
+def _build_news_dedup_key(record: dict) -> str:
+    source = _require_non_empty_string(record.get("source"), "news_signal.source").lower()
+    published_at = normalize_timestamp_to_utc_z(record.get("published_at"), "news_signal.published_at")
+    headline = _require_non_empty_string(record.get("headline"), "news_signal.headline")
+    source_id = _require_optional_string(record.get("source_id"), "news_signal.source_id")
+    url = _require_optional_string(record.get("url"), "news_signal.url")
+
+    normalized_headline = " ".join(headline.strip().lower().split())
+    locator_kind = "source_id"
+    locator_value = source_id
+    if locator_value is None:
+        locator_kind = "url"
+        locator_value = url.lower() if url is not None else None
+    if locator_value is None:
+        locator_kind = "headline"
+        locator_value = normalized_headline
+
+    seed = f"{source}|{published_at}|{locator_kind}|{locator_value}|{normalized_headline}"
+    return f"{source}:{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:16]}"
 
 
 def normalize_news_signal_record(record: object, *, entry_name: str = "news_signal") -> dict:
@@ -42,6 +64,8 @@ def normalize_news_signal_record(record: object, *, entry_name: str = "news_sign
         raise ValueError(f"{entry_name} must include url or source_id")
     normalized["url"] = url
     normalized["source_id"] = source_id
+    dedup_key = _require_optional_string(record.get("dedup_key"), f"{entry_name}.dedup_key")
+    normalized["dedup_key"] = dedup_key or _build_news_dedup_key(record)
 
     metadata = record.get("metadata", {})
     if metadata is None:
@@ -87,10 +111,12 @@ def build_news_signal_bundle(records: object) -> dict:
         "symbols": sorted(by_symbol),
         "assets": sorted(by_asset),
         "topics": sorted(by_topic),
+        "categories": sorted({record["category"] for record in normalized_records}),
         "first_published_at": normalized_records[0]["published_at"] if normalized_records else None,
         "last_published_at": normalized_records[-1]["published_at"] if normalized_records else None,
         "max_relevance_score": max((record["relevance_score"] for record in normalized_records), default=None),
         "max_impact_score": max((record["impact_score"] for record in normalized_records), default=None),
+        "unique_dedup_key_count": len({record["dedup_key"] for record in normalized_records}),
     }
 
     return {

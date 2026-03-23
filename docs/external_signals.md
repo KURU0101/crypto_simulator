@@ -67,6 +67,10 @@
 - `by_asset`: `dict[asset] -> list[signal]`
 - `by_topic`: `dict[topic] -> list[signal]`
 
+追加された共通項目:
+
+- `dedup_key`: 軽量 dedup 用の識別子
+
 ## topic-only の扱い
 
 - `symbol` がなくても `topic` があれば受け入れる
@@ -119,13 +123,28 @@ CoinDesk との差分:
 - collector: RSS GET と XML item 抽出
 - adapter: item を `news_signals` schema へ正規化
 - save: 正規化後 bundle と観測 summary のみ保存
-- observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、source/symbol/asset/topic 分布、published_at 分布、warning、error を集計
+- observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、source/symbol/asset/topic/category 分布、published_at 分布、warning、error を集計
 
 source ごとの切り分け:
 
 - 共通: fetch、RSS parse、保存、run_id 生成、observation 集計
-- source 固有: default feed URL、item adapter、簡易 topic/symbol 分類
+- source 固有: default feed URL、item adapter、date/guid/link の解釈、簡易 topic/symbol 分類
 - source 固有で吸収しきれない差分は `metadata` に逃がす
+
+adapter 境界:
+
+- 共通 collector 本体: [src/trade_simulator/news_collector.py](/home/kuru0101/crypto_simulator/crypto_simulator/src/trade_simulator/news_collector.py)
+- source adapter 群: [src/trade_simulator/news_adapters.py](/home/kuru0101/crypto_simulator/crypto_simulator/src/trade_simulator/news_adapters.py)
+- `pubDate` の UTC 正規化、`guid` / `link` fallback、source 固有分類は adapter 側で吸収する
+- collector 側は source registry を見て adapter を呼び、共通保存と observation 集計だけを担当する
+
+dedup key の生成規則:
+
+- record ごとに `dedup_key` を持つ
+- 生成種別は `source:sha1(prefix)` 形式
+- seed は `source | published_at | locator_kind | locator_value | normalized_headline`
+- `locator_kind` は `source_id` を優先し、無ければ `url`、さらに無ければ `headline`
+- これは軽量 dedup 用であり、cross-source の完全な同一性保証は行わない
 
 実行:
 
@@ -157,6 +176,7 @@ source ごとの切り分け:
 - `symbol_distribution`
 - `asset_distribution`
 - `topic_distribution`
+- `category_distribution`
 - `published_at_by_date`
 - `published_at_by_hour_utc`
 - `warnings`
@@ -168,12 +188,12 @@ source 増加で見えた制約:
 - collector 設定はまだ 1 run 1 source 固定で、複数 source 同時収集は未対応
 - RSS item 抽出は共通化できたが、topic / symbol / impact の推定は source 依存が強い
 - `missing_field_counts` は source 固有 required field 定義に依存する
-- dedup は未完成で、source 横断の同一イベント統合は次段に分離が必要
+- dedup key は軽量比較用で、source 横断の同一イベント統合は次段に分離が必要
 
 3 本目以降の前に入れるとよい最小修正:
 
-- source ごとの adapter を別モジュールへ分離する
-- observation に category 分布を追加する
-- source 横断の軽量 dedup key を `metadata` ではなく共通 summary 層で扱う
+- source ごとの item parser 差分が出た場合は adapter と同じ粒度で parser も source 側へ寄せる
+- summary に dedup key の重複件数を追加する
+- source 横断比較用の低コストな canonical topic ルールを追加する
 
 adapter の score は今回は収集導線確認用の固定/簡易ヒューリスティクスです。高度な sentiment や impact 推定は次段に分離します。

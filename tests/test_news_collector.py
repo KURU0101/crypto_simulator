@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from trade_simulator.news_adapters import build_news_dedup_key
 from trade_simulator.news_collector import (
     COINDESK_RSS_FEED_URL,
     NEWS_SOURCE_PROFILES,
@@ -134,6 +135,13 @@ def test_adapt_coindesk_rss_item_maps_symbol_and_metadata() -> None:
     assert record["asset"] == "BTC"
     assert record["topic"] == "bitcoin"
     assert record["published_at"] == "2026-03-24T01:00:00Z"
+    assert record["dedup_key"] == build_news_dedup_key(
+        source="coindesk",
+        published_at="2026-03-24T01:00:00Z",
+        headline="Bitcoin rises as ETF flows improve",
+        source_id="btc-1",
+        url="https://www.coindesk.com/markets/bitcoin-rises",
+    )
     assert record["metadata"]["collector_source"] == "coindesk_rss"
 
 
@@ -157,7 +165,43 @@ def test_adapt_sec_press_release_rss_item_maps_topic_and_metadata() -> None:
     assert record["topic"] == "crypto regulation"
     assert record["published_at"] == "2026-03-24T03:00:00Z"
     assert record["source_id"] == "2026-50"
+    assert record["dedup_key"] == build_news_dedup_key(
+        source="sec",
+        published_at="2026-03-24T03:00:00Z",
+        headline="SEC Announces Digital Asset Enforcement Results",
+        source_id="2026-50",
+        url="https://www.sec.gov/news/press-release/2026-50",
+    )
     assert record["metadata"]["collector_source"] == "sec_press_releases_rss"
+
+
+def test_build_news_dedup_key_falls_back_from_source_id_to_url_to_headline() -> None:
+    with_source_id = build_news_dedup_key(
+        source="sec",
+        published_at="2026-03-24T03:00:00Z",
+        headline="Headline",
+        source_id="2026-50",
+        url="https://example.com/item",
+    )
+    with_url = build_news_dedup_key(
+        source="sec",
+        published_at="2026-03-24T03:00:00Z",
+        headline="Headline",
+        source_id=None,
+        url="https://example.com/item",
+    )
+    with_headline = build_news_dedup_key(
+        source="sec",
+        published_at="2026-03-24T03:00:00Z",
+        headline="Headline",
+        source_id=None,
+        url=None,
+    )
+
+    assert with_source_id.startswith("sec:")
+    assert with_url.startswith("sec:")
+    assert with_headline.startswith("sec:")
+    assert len({with_source_id, with_url, with_headline}) == 3
 
 
 def test_run_news_collector_collects_coindesk_records_and_saves_them(tmp_path: Path) -> None:
@@ -192,12 +236,16 @@ def test_run_news_collector_collects_coindesk_records_and_saves_them(tmp_path: P
     assert observation["asset_distribution"] == {"BTC": 1}
     assert observation["topic_distribution"]["bitcoin"] == 1
     assert observation["topic_distribution"]["policy"] == 1
+    assert observation["category_distribution"] == {"markets": 1, "policy": 1}
     assert observation["source_distribution"] == {"coindesk": 2}
     assert Path(observation["saved_paths"]["normalized"]).exists()
     assert Path(observation["saved_paths"]["summary"]).exists()
 
     saved_bundle = json.loads(Path(observation["saved_paths"]["normalized"]).read_text(encoding="utf-8"))
     assert saved_bundle["summary"]["record_count"] == 2
+    assert saved_bundle["summary"]["categories"] == ["markets", "policy"]
+    assert saved_bundle["summary"]["unique_dedup_key_count"] == 2
+    assert "dedup_key" in saved_bundle["records"][0]
 
 
 def test_run_news_collector_collects_sec_records_and_tracks_source_specific_summary(tmp_path: Path) -> None:
@@ -232,11 +280,13 @@ def test_run_news_collector_collects_sec_records_and_tracks_source_specific_summ
     assert observation["asset_distribution"] == {}
     assert observation["topic_distribution"]["crypto regulation"] == 1
     assert observation["topic_distribution"]["sec rulemaking"] == 1
+    assert observation["category_distribution"] == {"enforcement": 1, "rulemaking": 1}
     assert observation["published_at_by_hour_utc"] == {"2026-03-24T03:00:00Z": 2}
     assert Path(observation["saved_paths"]["summary"]).exists()
 
     saved_bundle = json.loads(Path(observation["saved_paths"]["normalized"]).read_text(encoding="utf-8"))
     assert saved_bundle["summary"]["sources"] == ["sec"]
+    assert saved_bundle["summary"]["unique_dedup_key_count"] == 2
 
 
 def test_run_news_collector_handles_empty_feed_boundary_case(tmp_path: Path) -> None:
@@ -259,6 +309,7 @@ def test_run_news_collector_handles_empty_feed_boundary_case(tmp_path: Path) -> 
     assert result["observation"]["fetched_item_count"] == 0
     assert result["observation"]["saved_record_count"] == 0
     assert result["observation"]["warnings"] == ["rss feed returned no items"]
+    assert result["observation"]["category_distribution"] == {}
 
 
 def test_run_news_collector_records_normalization_failures_for_missing_required_fields(tmp_path: Path) -> None:
@@ -359,6 +410,49 @@ def test_run_news_collector_records_missing_title_for_sec_source(tmp_path: Path)
 
     assert result["observation"]["validation_failure_count"] == 1
     assert result["observation"]["missing_field_counts"]["title"] == 1
+
+
+def test_run_news_collector_preserves_duplicate_dedup_key_boundary_case(tmp_path: Path) -> None:
+    duplicate_xml = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title>Bitcoin rises as ETF flows improve</title>
+          <link>https://www.coindesk.com/markets/bitcoin-rises</link>
+          <guid>btc-1</guid>
+          <description>Example</description>
+          <pubDate>Tue, 24 Mar 2026 01:00:00 GMT</pubDate>
+          <category>Markets</category>
+        </item>
+        <item>
+          <title>Bitcoin rises as ETF flows improve</title>
+          <link>https://www.coindesk.com/markets/bitcoin-rises</link>
+          <guid>btc-1</guid>
+          <description>Example</description>
+          <pubDate>Tue, 24 Mar 2026 01:00:00 GMT</pubDate>
+          <category>Markets</category>
+        </item>
+      </channel>
+    </rss>
+    """
+    config = {
+        "collector": {
+            "source": "coindesk_rss",
+        },
+        "output": {
+            "output_dir": str(tmp_path / "var"),
+        },
+    }
+
+    result = run_news_collector(
+        config,
+        fetch_feed_fn=lambda feed_url, timeout_seconds: duplicate_xml,
+        now_fn=lambda: 1_774_000_000.0,
+    )
+
+    dedup_keys = [record["dedup_key"] for record in result["bundle"]["records"]]
+    assert result["observation"]["normalized_success_count"] == 2
+    assert len(set(dedup_keys)) == 1
 
 
 def test_run_news_collector_handles_fetch_failure(tmp_path: Path) -> None:
