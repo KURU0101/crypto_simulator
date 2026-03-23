@@ -35,6 +35,13 @@ source .venv/bin/activate
 python3 scripts/run_simulation.py --config config/simulation.example.json
 ```
 
+実データ returns パイプラインの最小実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_real_data_comparisons.py --config config/real_data_comparison.example.json
+```
+
 `Makefile` を使う場合:
 
 ```bash
@@ -47,6 +54,13 @@ comparison を実行する場合:
 ```bash
 source .venv/bin/activate
 python3 scripts/run_comparisons.py --config config/comparison.example.json
+```
+
+実データ returns パイプラインを `Makefile` から呼ぶ場合:
+
+```bash
+source .venv/bin/activate
+make run-real-data
 ```
 
 ## 手動確認
@@ -86,6 +100,17 @@ make test
 ```
 
 comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
+comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
+
+## 実データフェーズ
+
+実データフェーズは `OHLCV -> returns -> simulate -> comparison` の順で扱います。
+`simulate` に渡すのは常に `returns` と signals であり、生の OHLCV は直接渡しません。
+returns は close-to-close 定義で計算し、各 return はひとつ前の close から当該 timestamp の close までの変化率です。
+生成された returns の timestamp は後ろ側の close timestamp に揃えます。
+
+現在の最小構成では `BTC/USDT` のローカルサンプル OHLCV を [data/btcusdt_1h_sample.csv](/home/kuru0101/crypto_simulator/crypto_simulator/data/btcusdt_1h_sample.csv) に同梱しています。
+実データ comparison 用の設定例は [config/real_data_comparison.example.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/real_data_comparison.example.json) です。
 
 ## ディレクトリ方針
 

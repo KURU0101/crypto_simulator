@@ -1,0 +1,37 @@
+{
+  "data_source": {
+    "symbol": "BTC/USDT",
+    "ohlcv_csv_path": "data/btcusdt_1h_sample.csv"
+  },
+  "cases": [
+    {
+      "name": "threshold_real_data",
+      "strategy": "threshold",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "entry_threshold": 0.01,
+      "exit_threshold": -0.004
+    },
+    {
+      "name": "cumulative_drop_real_data",
+      "strategy": "cumulative_drop",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "entry_window": 2,
+      "entry_cumulative_threshold": -0.004,
+      "exit_threshold": 0.01
+    },
+    {
+      "name": "consecutive_drop_real_data",
+      "strategy": "consecutive_drop",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "consecutive_periods": 2,
+      "drop_threshold": -0.003,
+      "exit_threshold": 0.01
+    }
+  ]
+}
