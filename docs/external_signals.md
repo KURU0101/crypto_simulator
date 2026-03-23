@@ -89,13 +89,13 @@ SNS 候補:
 
 - Reddit: subreddit / search 結果を topic または symbol 集計に落とし込みやすい
 - YouTube: チャンネル動画メタデータやコメント集計を topic ベースで流し込みやすい
-- GitHub Discussions / Discord export などの手動集計: `metadata` に原系列情報を残しやすい
+- Hacker News public API: 一覧 ID と item JSON を topic ベースの signal に落とし込みやすい
 
 News 候補:
 
 - CoinDesk RSS
 - Cointelegraph RSS
-- The Block などの公開 RSS / sitemap
+- The Block などの公開 RSS / JSON
 - SEC / FRB / CFTC / 日銀などの公式発表ページ
 
 最初の接続先としては、RSS や公開 JSON を持つ News ソースが最も軽く、次に Reddit の手動・定期集計が妥当です。今回の形式には、取得後に source ごとの生項目を `metadata` に残しつつ、本文側は `source` / `symbol|topic` / `time` / score 群へ写像して流し込みます。

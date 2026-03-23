@@ -241,7 +241,7 @@ SNS summary は、共通項目をトップレベルに維持しつつ、source �
 サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
 設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。
 
-ニュース collector の最小接続では CoinDesk RSS を 1 ソースだけ対象にし、`collector -> adapter -> save -> observe` を分離しています。raw RSS は保存せず、正規化後の bundle と観測 summary だけを `var/news_signals/<source>/<run_id>/` に保存します。
+ニュース collector でも `collector -> adapter -> save -> observe` を分離しています。各 example config は 1 source ごとの最小構成で、raw RSS は保存せず、正規化後の bundle と観測 summary だけを `var/news_signals/<source>/<run_id>/` に保存します。
 
 統合観測導線として `python3 scripts/observe_external_signals.py` を追加し、保存済み `var/news_signals/**/summary.json` と `var/sns_signals/**/summary.json` を横断して読めるようにしました。これは読み取り専用で、外部再取得も `simulate` 連携も行いません。
 
@@ -261,7 +261,7 @@ SNS summary は、共通項目をトップレベルに維持しつつ、source �
 ## 開発手順
 
 1. `origin/main` の最新を前提に作業する
-2. `main` 以外の feature branch で作業する
+2. `main` 以外の作業ブランチで作業する
 3. `.venv` を有効化してから実行・テストする
 4. 変更後は最低限 `python3 -m pytest` を実行する
 
