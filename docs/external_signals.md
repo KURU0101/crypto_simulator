@@ -102,7 +102,7 @@ News 候補:
 
 ## Minimal SNS Collector
 
-今回の collector は `reddit_subreddit_new_json` と `youtube_channel_rss` を対象にします。どちらも公開 endpoint への GET のみで、raw payload は保存しません。
+今回の collector は `reddit_subreddit_new_json`、`youtube_channel_rss`、`hacker_news_public_api` を対象にします。いずれも公開 JSON / RSS endpoint への GET のみで、raw payload は保存しません。
 
 採用した 1 本目:
 
@@ -115,6 +115,13 @@ News 候補:
 - `youtube_channel_rss`
 - feed URL pattern: `https://www.youtube.com/feeds/videos.xml?channel_id=<channel_id>`
 - 選定理由: コメントではなく発信者側の upload を直接拾え、複数 channel を 1 source run に束ねても `sns_signals` と observation が崩れないかを検証しやすいため
+
+採用した 3 本目:
+
+- `hacker_news_public_api`
+- list URL: `https://hacker-news.firebaseio.com/v0/topstories.json`
+- item URL pattern: `https://hacker-news.firebaseio.com/v0/item/<id>.json`
+- 選定理由: listing 型でも RSS 型でもない `一覧ID -> item` の二段取得であり、source 差分に対する collector / adapter / observation の最小構造を検証しやすいため
 
 今回の割り切り:
 
@@ -148,10 +155,17 @@ YouTube 側の partial failure 方針:
 - 失敗 channel は `warnings` と `errors` に残す
 - 全 channel が取得失敗した場合のみ run 全体を `failed` とする
 
+Hacker News 側の割り切り:
+
+- 初期実装では `topstories` / `newstories` / `beststories` のみを対象にする
+- 一覧から取った先頭 N 件だけ item を取得する
+- 1 item = 1 signal とし、`mention_count` は `descendants` を採用する
+- `score` / `descendants` / `story_type` は `metadata` と summary に残す
+
 責務分離:
 
-- collector: Reddit listing JSON / YouTube channel RSS の GET と item 抽出
-- adapter: Reddit post / YouTube upload を `sns_signals` schema へ正規化
+- collector: Reddit listing JSON / YouTube channel RSS / Hacker News list+item JSON の GET と item 抽出
+- adapter: Reddit post / YouTube upload / Hacker News story を `sns_signals` schema へ正規化
 - save: 正規化後 bundle と観測 summary のみ保存
 - observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、source/group/group_theme/publisher_type/channel/symbol/topic 分布、mention_count 要約、timestamp 分布、warning、error を集計
 
@@ -160,6 +174,7 @@ source ごとの切り分け:
 - 共通: fetch、保存、run_id 生成、observation 集計
 - Reddit 固有: listing URL、JSON parse、post adapter
 - YouTube 固有: channel feed URL、Atom feed parse、upload adapter、group/channel config 解釈
+- Hacker News 固有: story list URL、item URL template、一覧 ID 取得、item JSON parse、story adapter
 - source 固有で吸収しきれない差分は `metadata` に逃がす
 
 adapter 境界:
@@ -168,6 +183,7 @@ adapter 境界:
 - source adapter 群: [src/trade_simulator/sns_adapters.py](/home/kuru0101/crypto_simulator/crypto_simulator/src/trade_simulator/sns_adapters.py)
 - Reddit の `created_utc` 正規化、topic/symbol 推定、`mention_count` / score 群の簡易生成は adapter 側で吸収する
 - YouTube の `published` 正規化、group/channel metadata 付与、topic/symbol 推定、簡易 score 生成も adapter 側で吸収する
+- Hacker News の `time` 正規化、`score` / `descendants` / `story_type` の写像、topic/symbol 推定も adapter 側で吸収する
 - collector 側は source registry を見て adapter を呼び、共通保存と observation 集計だけを担当する
 
 dedup key の生成規則:
@@ -183,6 +199,7 @@ dedup key の生成規則:
 
 - `python3 scripts/run_sns_collector.py --config config/sns_collector.reddit.example.json`
 - `python3 scripts/run_sns_collector.py --config config/sns_collector.youtube.example.json`
+- `python3 scripts/run_sns_collector.py --config config/sns_collector.hacker_news.example.json`
 
 保存:
 
@@ -190,6 +207,8 @@ dedup key の生成規則:
 - `var/sns_signals/reddit_subreddit_new_json/<run_id>/summary.json`
 - `var/sns_signals/youtube_channel_rss/<run_id>/normalized.json`
 - `var/sns_signals/youtube_channel_rss/<run_id>/summary.json`
+- `var/sns_signals/hacker_news_public_api/<run_id>/normalized.json`
+- `var/sns_signals/hacker_news_public_api/<run_id>/summary.json`
 
 観測できる項目:
 
@@ -215,6 +234,9 @@ dedup key の生成規則:
 - `symbol_distribution`
 - `topic_distribution`
 - `mention_count_summary`
+- `score_summary`
+- `comment_count_summary`
+- `story_type_distribution`
 - `timestamp_by_date`
 - `timestamp_by_hour_utc`
 - `warnings`
@@ -229,6 +251,8 @@ source 増加で見えた制約:
 - Reddit 固有の rate limit や listing 粒度差分を吸収する共通抽象はまだ持たない
 - YouTube では channel upload 自体を 1 mention とみなしており、視聴者反応や動画性能は使っていない
 - group は config 主導なので、group_theme の粒度がぶれると observation の比較軸もぶれる
+- Hacker News は story list と item の二段取得なので、item fetch 数と latency が source ごとに増えやすい
+- `descendants` を `mention_count` とみなすのは近似であり、コメント内容の分析はしていない
 
 ## Minimal News Collector
 

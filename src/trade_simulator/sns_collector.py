@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from trade_simulator.sns_adapters import (
+    HACKER_NEWS_TOPSTORIES_URL,
     REDDIT_SUBREDDIT_NEW_JSON_URL,
     SNS_SOURCE_PROFILES,
     build_youtube_channel_feed_url,
@@ -117,6 +118,13 @@ def parse_reddit_listing_items(json_text: str, *, max_items: int) -> list[dict]:
     return items
 
 
+def parse_json_payload(json_text: str, *, description: str) -> object:
+    try:
+        return json.loads(json_text)
+    except json.JSONDecodeError as error:
+        raise SnsCollectorError(f"failed to parse {description} JSON") from error
+
+
 def _validate_youtube_channel(channel: object, *, group_name: str, index: int, group_defaults: dict) -> dict:
     if not isinstance(channel, dict):
         raise TypeError(f"{group_name}.channels[{index}] must be a dict")
@@ -158,6 +166,15 @@ def _validate_youtube_group(group: object, *, index: int) -> dict:
     return normalized
 
 
+def _validate_hacker_news_list_name(value: object, name: str) -> str:
+    normalized = _validate_non_empty_string(value, name)
+    allowed = {"topstories", "newstories", "beststories"}
+    if normalized not in allowed:
+        allowed_text = ", ".join(sorted(allowed))
+        raise ValueError(f"{name} must be one of: {allowed_text}")
+    return normalized
+
+
 def load_sns_collector_config(config: object) -> dict:
     if not isinstance(config, dict):
         raise ValueError("sns collector config must be a dict")
@@ -189,6 +206,19 @@ def load_sns_collector_config(config: object) -> dict:
         if not isinstance(groups, list) or not groups:
             raise ValueError("collector.groups must be a non-empty list")
         collector["groups"] = [_validate_youtube_group(group, index=index) for index, group in enumerate(groups)]
+    elif profile["kind"] == "hacker_news":
+        collector["story_list"] = _validate_hacker_news_list_name(
+            collector.get("story_list", "topstories"),
+            "collector.story_list",
+        )
+        collector["list_url"] = _validate_non_empty_string(
+            collector.get("list_url", profile["default_list_url"]),
+            "collector.list_url",
+        )
+        collector["item_url_template"] = _validate_non_empty_string(
+            collector.get("item_url_template", profile["default_item_url_template"]),
+            "collector.item_url_template",
+        )
     else:
         raise ValueError(f"unsupported sns collector kind: {profile['kind']}")
 
@@ -225,6 +255,9 @@ def _empty_observation(*, source: str, started_at: str, listing_url: str | None 
         "symbol_distribution": {},
         "topic_distribution": {},
         "mention_count_summary": {"min": None, "max": None, "average": None, "total": 0},
+        "score_summary": {"min": None, "max": None, "average": None, "total": 0},
+        "comment_count_summary": {"min": None, "max": None, "average": None, "total": 0},
+        "story_type_distribution": {},
         "timestamp_by_date": {},
         "timestamp_by_hour_utc": {},
         "warnings": [],
@@ -259,6 +292,9 @@ def _build_observation(
     timestamp_by_date: dict[str, int] = {}
     timestamp_by_hour_utc: dict[str, int] = {}
     mention_counts: list[int] = []
+    score_values: list[int] = []
+    comment_counts: list[int] = []
+    story_type_distribution: dict[str, int] = {}
     unique_dedup_keys: set[str] = set()
 
     for record in normalized_records:
@@ -280,6 +316,12 @@ def _build_observation(
         if record["topic"] is not None:
             topic_distribution[record["topic"]] = topic_distribution.get(record["topic"], 0) + 1
         mention_counts.append(record["mention_count"])
+        if isinstance(metadata.get("score"), int):
+            score_values.append(metadata["score"])
+        if isinstance(metadata.get("descendants"), int):
+            comment_counts.append(metadata["descendants"])
+        if metadata.get("story_type"):
+            story_type_distribution[metadata["story_type"]] = story_type_distribution.get(metadata["story_type"], 0) + 1
         if "dedup_key" in record:
             unique_dedup_keys.add(record["dedup_key"])
         timestamp = datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
@@ -295,6 +337,18 @@ def _build_observation(
         "max": max(mention_counts) if mention_counts else None,
         "average": statistics.fmean(mention_counts) if mention_counts else None,
         "total": sum(mention_counts),
+    }
+    score_summary = {
+        "min": min(score_values) if score_values else None,
+        "max": max(score_values) if score_values else None,
+        "average": statistics.fmean(score_values) if score_values else None,
+        "total": sum(score_values),
+    }
+    comment_count_summary = {
+        "min": min(comment_counts) if comment_counts else None,
+        "max": max(comment_counts) if comment_counts else None,
+        "average": statistics.fmean(comment_counts) if comment_counts else None,
+        "total": sum(comment_counts),
     }
 
     observation = {
@@ -320,6 +374,9 @@ def _build_observation(
         "symbol_distribution": symbol_distribution,
         "topic_distribution": topic_distribution,
         "mention_count_summary": mention_count_summary,
+        "score_summary": score_summary,
+        "comment_count_summary": comment_count_summary,
+        "story_type_distribution": story_type_distribution,
         "timestamp_by_date": timestamp_by_date,
         "timestamp_by_hour_utc": timestamp_by_hour_utc,
         "warnings": warnings,
@@ -598,6 +655,131 @@ def _run_youtube_sns_collector(
     return {"bundle": bundle, "observation": observation}
 
 
+def _run_hacker_news_sns_collector(
+    collector: dict,
+    output: dict,
+    profile: dict,
+    *,
+    fetch_text_fn: Callable[..., str],
+    now_fn: Callable[[], float],
+) -> dict:
+    started_at = _utc_now_iso(now_fn)
+    source_context = {
+        "story_list": collector["story_list"],
+        "list_url": collector["list_url"],
+        "item_url_template": collector["item_url_template"],
+    }
+    empty_observation = _empty_observation(source=collector["source"], started_at=started_at)
+    empty_observation.update(source_context)
+
+    try:
+        listing_text = fetch_text_fn(collector["list_url"], timeout_seconds=collector["timeout_seconds"])
+        listing_payload = parse_json_payload(listing_text, description="Hacker News story list")
+        if not isinstance(listing_payload, list):
+            raise SnsCollectorError("Hacker News story list payload must be a list")
+        story_ids = listing_payload[: collector["max_items"]]
+    except Exception as error:
+        ended_at = _utc_now_iso(now_fn)
+        observation = dict(empty_observation)
+        observation["status"] = "failed"
+        observation["ended_at"] = ended_at
+        observation["duration_seconds"] = (
+            datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+            - datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        ).total_seconds()
+        observation["errors"] = [{"message": str(error)}]
+        return {"bundle": build_sns_signal_bundle([]), "observation": observation}
+
+    tracked_fields = profile["required_item_fields"] + profile["tracked_optional_item_fields"]
+    missing_field_counts = {field_name: 0 for field_name in tracked_fields}
+    normalized_records: list[dict] = []
+    normalized_failures: list[dict] = []
+    warnings: list[str] = []
+    fetched_item_count = 0
+
+    for index, story_id in enumerate(story_ids):
+        if isinstance(story_id, bool) or not isinstance(story_id, int):
+            normalized_failures.append({"item_index": index, "story_id": story_id, "message": "Hacker News story id must be an int"})
+            continue
+        item_url = collector["item_url_template"].format(item_id=story_id)
+        try:
+            item_text = fetch_text_fn(item_url, timeout_seconds=collector["timeout_seconds"])
+            item_payload = parse_json_payload(item_text, description="Hacker News item")
+            if not isinstance(item_payload, dict):
+                raise SnsCollectorError("Hacker News item payload must be a dict")
+            item = dict(item_payload)
+            fetched_item_count += 1
+        except Exception as error:
+            normalized_failures.append({"item_index": index, "story_id": story_id, "message": str(error)})
+            continue
+
+        for field_name in tracked_fields:
+            value = item.get(field_name)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                missing_field_counts[field_name] += 1
+        try:
+            normalized_records.append(
+                profile["adapter"](
+                    item,
+                    fetched_at=started_at,
+                    list_name=collector["story_list"],
+                    item_url=item_url,
+                )
+            )
+        except Exception as error:
+            normalized_failures.append(
+                {
+                    "item_index": index,
+                    "story_id": story_id,
+                    "title": item.get("title"),
+                    "message": str(error),
+                }
+            )
+
+    if not story_ids:
+        warnings.append("Hacker News story list returned no ids")
+
+    bundle = build_sns_signal_bundle(normalized_records)
+    provisional_observation = _build_observation(
+        source=collector["source"],
+        started_at=started_at,
+        ended_at=_utc_now_iso(now_fn),
+        fetched_item_count=fetched_item_count,
+        normalized_records=normalized_records,
+        normalized_failures=normalized_failures,
+        missing_field_counts=missing_field_counts,
+        saved_paths={},
+        warnings=warnings,
+        source_context=source_context,
+    )
+    saved_paths = save_sns_collection_run(
+        bundle,
+        provisional_observation,
+        output_dir=output["output_dir"],
+        source=collector["source"],
+        started_at=started_at,
+        save_run_summary=output["save_run_summary"],
+    )
+    observation = _build_observation(
+        source=collector["source"],
+        started_at=started_at,
+        ended_at=_utc_now_iso(now_fn),
+        fetched_item_count=fetched_item_count,
+        normalized_records=normalized_records,
+        normalized_failures=normalized_failures,
+        missing_field_counts=missing_field_counts,
+        saved_paths=saved_paths,
+        warnings=warnings,
+        source_context=source_context,
+    )
+    if output["save_run_summary"] and "summary" in saved_paths:
+        summary_path = Path(saved_paths["summary"])
+        with summary_path.open("w", encoding="utf-8") as file:
+            json.dump(observation, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+    return {"bundle": bundle, "observation": observation}
+
+
 def run_sns_collector(
     config: dict,
     *,
@@ -633,6 +815,14 @@ def run_sns_collector(
             fetch_text_fn=fetch_text_fn,
             now_fn=now_fn,
         )
+    if profile["kind"] == "hacker_news":
+        return _run_hacker_news_sns_collector(
+            collector,
+            output,
+            profile,
+            fetch_text_fn=fetch_text_fn,
+            now_fn=now_fn,
+        )
     raise ValueError(f"unsupported sns collector kind: {profile['kind']}")
 
 
@@ -643,6 +833,7 @@ def build_sns_collector_parser() -> argparse.ArgumentParser:
 
 
 __all__ = [
+    "HACKER_NEWS_TOPSTORIES_URL",
     "REDDIT_SUBREDDIT_NEW_JSON_URL",
     "SNS_SOURCE_PROFILES",
     "SnsCollectorError",

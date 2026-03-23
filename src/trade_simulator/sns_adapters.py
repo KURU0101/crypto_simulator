@@ -10,6 +10,9 @@ from trade_simulator.sns_signals import normalize_sns_signal_record
 
 REDDIT_SUBREDDIT_NEW_JSON_URL = "https://www.reddit.com/r/CryptoCurrency/new.json"
 YOUTUBE_CHANNEL_FEED_URL_TEMPLATE = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+HACKER_NEWS_API_BASE_URL = "https://hacker-news.firebaseio.com/v0"
+HACKER_NEWS_TOPSTORIES_URL = f"{HACKER_NEWS_API_BASE_URL}/topstories.json"
+HACKER_NEWS_ITEM_URL_TEMPLATE = f"{HACKER_NEWS_API_BASE_URL}/item/{{item_id}}.json"
 
 ATOM_NAMESPACE = "{http://www.w3.org/2005/Atom}"
 YOUTUBE_NAMESPACE = "{http://www.youtube.com/xml/schemas/2015}"
@@ -198,6 +201,10 @@ def build_youtube_channel_feed_url(channel_id: str) -> str:
     return YOUTUBE_CHANNEL_FEED_URL_TEMPLATE.format(channel_id=normalized_channel_id)
 
 
+def build_hacker_news_item_url(item_id: int) -> str:
+    return HACKER_NEWS_ITEM_URL_TEMPLATE.format(item_id=item_id)
+
+
 def parse_youtube_feed_items(xml_text: str, *, max_items: int) -> list[dict]:
     try:
         root = ET.fromstring(xml_text)
@@ -320,6 +327,85 @@ def adapt_youtube_video(item: dict, *, fetched_at: str, channel_context: dict) -
     return normalize_sns_signal_record(record, entry_name="youtube_channel_rss_item")
 
 
+def _classify_hacker_news_story(title: str, url: str | None, text: str | None, story_type: str) -> dict:
+    classifier_text = " ".join(part for part in (title, url or "", text or "", story_type) if part)
+    fallback_topic = "technology discussion"
+    if story_type == "job":
+        fallback_topic = "technology hiring"
+    elif story_type == "poll":
+        fallback_topic = "technology poll"
+    return _classify_symbol_and_topic(classifier_text, fallback_topic=fallback_topic)
+
+
+def _hacker_news_activity_score(score: int, descendants: int) -> float:
+    activity = math.log1p(max(score, 0) + max(descendants, 0)) / 7.0
+    return min(1.0, max(0.0, activity))
+
+
+def _hacker_news_anomaly_score(title: str, score: int, descendants: int, story_type: str) -> float:
+    base = min(0.6, math.log1p(max(score, 0)) / 10.0 + math.log1p(max(descendants, 0)) / 10.0)
+    if story_type in {"job", "poll"}:
+        base += 0.1
+    if any(keyword in title.lower() for keyword in ("launch", "release", "funding", "acquire", "regulation", "bitcoin", "ai")):
+        base += 0.2
+    return min(1.0, max(0.0, base))
+
+
+def adapt_hacker_news_story(item: dict, *, fetched_at: str, list_name: str, item_url: str) -> dict:
+    title = _require_text(item, "title", prefix="hacker news item")
+    item_id_raw = item.get("id")
+    if isinstance(item_id_raw, bool) or not isinstance(item_id_raw, int):
+        raise TypeError("hacker news item id must be an int")
+    story_type = _require_text(item, "type", prefix="hacker news item")
+    timestamp = normalize_epoch_seconds_to_utc_z(item.get("time"), prefix="hacker news item", field_name="time")
+    score_raw = item.get("score")
+    score = int(score_raw) if isinstance(score_raw, int) else 0
+    descendants_raw = item.get("descendants")
+    descendants = int(descendants_raw) if isinstance(descendants_raw, int) else 0
+    url = str(item.get("url") or "").strip() or None
+    text = str(item.get("text") or "").strip() or None
+    author = str(item.get("by") or "").strip() or None
+
+    classification = _classify_hacker_news_story(title, url, text, story_type)
+    positive_score, negative_score, neutral_score = _score_text_sentiment(" ".join(part for part in (title, text or "") if part))
+    entity_key = classification["symbol"] or classification["topic"]
+
+    record = {
+        "source": "hacker_news",
+        "symbol": classification["symbol"],
+        "topic": classification["topic"],
+        "timestamp": timestamp,
+        "mention_count": descendants,
+        "positive_score": positive_score,
+        "negative_score": negative_score,
+        "neutral_score": neutral_score,
+        "activity_score": _hacker_news_activity_score(score, descendants),
+        "anomaly_score": _hacker_news_anomaly_score(title, score, descendants, story_type),
+        "dedup_key": build_sns_dedup_key(
+            source="hacker_news",
+            timestamp=timestamp,
+            entity_key=entity_key,
+            source_id=str(item_id_raw),
+            permalink=url or item_url,
+        ),
+        "metadata": {
+            "collector_source": "hacker_news_public_api",
+            "fetched_at": fetched_at,
+            "source_id": str(item_id_raw),
+            "permalink": url,
+            "title": title,
+            "author": author,
+            "score": score if score_raw is not None else None,
+            "descendants": descendants if descendants_raw is not None else None,
+            "story_type": story_type,
+            "list_name": list_name,
+            "item_url": item_url,
+            "url": url,
+        },
+    }
+    return normalize_sns_signal_record(record, entry_name="hacker_news_public_api_item")
+
+
 SNS_SOURCE_PROFILES = {
     "reddit_subreddit_new_json": {
         "kind": "reddit",
@@ -334,16 +420,29 @@ SNS_SOURCE_PROFILES = {
         "tracked_optional_item_fields": ("updated_at",),
         "adapter": adapt_youtube_video,
     },
+    "hacker_news_public_api": {
+        "kind": "hacker_news",
+        "default_list_url": HACKER_NEWS_TOPSTORIES_URL,
+        "default_item_url_template": HACKER_NEWS_ITEM_URL_TEMPLATE,
+        "required_item_fields": ("id", "title", "type", "time"),
+        "tracked_optional_item_fields": ("score", "descendants", "url", "by"),
+        "adapter": adapt_hacker_news_story,
+    },
 }
 
 
 __all__ = [
+    "HACKER_NEWS_API_BASE_URL",
+    "HACKER_NEWS_ITEM_URL_TEMPLATE",
+    "HACKER_NEWS_TOPSTORIES_URL",
     "REDDIT_SUBREDDIT_NEW_JSON_URL",
     "SNS_SOURCE_PROFILES",
     "YOUTUBE_CHANNEL_FEED_URL_TEMPLATE",
+    "adapt_hacker_news_story",
     "adapt_reddit_post",
     "adapt_youtube_video",
     "build_sns_dedup_key",
+    "build_hacker_news_item_url",
     "build_youtube_channel_feed_url",
     "normalize_epoch_seconds_to_utc_z",
     "parse_youtube_feed_items",
