@@ -1,4 +1,4 @@
-.PHONY: setup run run-real-data run-pseudo-realtime test
+.PHONY: setup run run-real-data run-pseudo-realtime run-live-decision test
 
 setup:
 	python3 -m pip install -r requirements.txt
@@ -12,6 +12,9 @@ run-real-data:
 
 run-pseudo-realtime:
 	python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json
+
+run-live-decision:
+	python3 scripts/run_live_decision_runner.py --config config/live_decision_runner.example.json
 
 test:
 	python3 -m pytest
