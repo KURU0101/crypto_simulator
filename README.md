@@ -34,6 +34,19 @@ source .venv/bin/activate
 make run
 ```
 
+## 手動確認
+
+`python3 scripts/run_simulation.py --config config/simulation.example.json` を実行し、出力 JSON の以下を確認します。
+
+- `returns`
+- `entry_signals`
+- `exit_signals`
+- `position`
+- `equity_curve`
+- `final_value`
+
+例の設定では 2 期間目は `exit_signals` により非保有となるため資産は据え置きになり、`position` は `[true, false, true, true]`、`final_value` は `1050703.0` になります。
+
 ## テスト
 
 標準のテストコマンド:
