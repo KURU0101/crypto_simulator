@@ -2,19 +2,28 @@ from __future__ import annotations
 
 import hashlib
 import math
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from trade_simulator.sns_signals import normalize_sns_signal_record
 
 
 REDDIT_SUBREDDIT_NEW_JSON_URL = "https://www.reddit.com/r/CryptoCurrency/new.json"
+YOUTUBE_CHANNEL_FEED_URL_TEMPLATE = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+
+ATOM_NAMESPACE = "{http://www.w3.org/2005/Atom}"
+YOUTUBE_NAMESPACE = "{http://www.youtube.com/xml/schemas/2015}"
 
 _POSITIVE_KEYWORDS = (
+    "adoption",
+    "approval",
     "bull",
     "breakout",
     "gain",
     "green",
     "high",
+    "launch",
+    "partnership",
     "rally",
     "surge",
     "up",
@@ -22,6 +31,7 @@ _POSITIVE_KEYWORDS = (
 _NEGATIVE_KEYWORDS = (
     "ban",
     "bear",
+    "crackdown",
     "crash",
     "down",
     "drop",
@@ -33,18 +43,18 @@ _NEGATIVE_KEYWORDS = (
 )
 
 
-def _require_reddit_text(item: dict, field_name: str) -> str:
+def _require_text(item: dict, field_name: str, *, prefix: str) -> str:
     value = item.get(field_name)
     if value is None or not str(value).strip():
-        raise ValueError(f"reddit item {field_name} is required")
+        raise ValueError(f"{prefix} {field_name} is required")
     return str(value).strip()
 
 
-def normalize_reddit_created_utc(value: object) -> str:
+def normalize_epoch_seconds_to_utc_z(value: object, *, prefix: str, field_name: str) -> str:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError("reddit item created_utc must be a number")
+        raise TypeError(f"{prefix} {field_name} must be a number")
     if value < 0:
-        raise ValueError("reddit item created_utc must be non-negative")
+        raise ValueError(f"{prefix} {field_name} must be non-negative")
     return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -53,11 +63,12 @@ def build_sns_dedup_key(
     source: str,
     timestamp: str,
     entity_key: str,
-    post_id: str | None,
+    source_id: str | None = None,
+    post_id: str | None = None,
     permalink: str | None,
 ) -> str:
     locator_kind = "source_id"
-    locator_value = (post_id or "").strip()
+    locator_value = (source_id or post_id or "").strip()
     if not locator_value:
         locator_kind = "permalink"
         locator_value = (permalink or "").strip().lower()
@@ -66,28 +77,7 @@ def build_sns_dedup_key(
     return f"{source.lower()}:{digest}"
 
 
-def _classify_reddit_post(title: str, selftext: str, subreddit: str, link_flair_text: str | None) -> dict:
-    text = " ".join(part for part in (title.lower(), selftext.lower(), subreddit.lower(), (link_flair_text or "").lower()) if part)
-    padded_text = f" {text} "
-
-    if "bitcoin" in text or " btc " in padded_text:
-        return {"symbol": "BTCUSDT", "topic": "bitcoin"}
-    if "ethereum" in text or " ether " in padded_text or " eth " in padded_text:
-        return {"symbol": "ETHUSDT", "topic": "ethereum"}
-    if "etf" in text:
-        return {"symbol": None, "topic": "crypto etf"}
-    if "regulation" in text or "sec" in text:
-        return {"symbol": None, "topic": "crypto regulation"}
-    if "stablecoin" in text:
-        return {"symbol": None, "topic": "stablecoins"}
-    if "macro" in text or "fed" in text or "fomc" in text:
-        return {"symbol": None, "topic": "crypto macro"}
-
-    normalized_subreddit = subreddit.replace("_", " ").strip().lower()
-    return {"symbol": None, "topic": normalized_subreddit or "crypto discussion"}
-
-
-def _score_reddit_sentiment(text: str) -> tuple[float, float, float]:
+def _score_text_sentiment(text: str) -> tuple[float, float, float]:
     lowered = f" {text.lower()} "
     positive_hits = sum(1 for keyword in _POSITIVE_KEYWORDS if keyword in lowered)
     negative_hits = sum(1 for keyword in _NEGATIVE_KEYWORDS if keyword in lowered)
@@ -99,6 +89,36 @@ def _score_reddit_sentiment(text: str) -> tuple[float, float, float]:
     if positive_hits and negative_hits:
         return (0.4, 0.4, 0.2)
     return (0.2, 0.2, 0.6)
+
+
+def _classify_symbol_and_topic(text: str, *, fallback_topic: str) -> dict:
+    lowered = text.lower()
+    padded = f" {lowered} "
+    if "bitcoin" in lowered or " btc " in padded:
+        return {"symbol": "BTCUSDT", "topic": "bitcoin"}
+    if "ethereum" in lowered or " ether " in padded or " eth " in padded:
+        return {"symbol": "ETHUSDT", "topic": "ethereum"}
+    if "solana" in lowered or " sol " in padded:
+        return {"symbol": "SOLUSDT", "topic": "solana"}
+    if "macro" in lowered or "fed" in lowered or "fomc" in lowered:
+        return {"symbol": None, "topic": "crypto macro"}
+    if "stablecoin" in lowered:
+        return {"symbol": None, "topic": "stablecoins"}
+    if "regulation" in lowered or "sec" in lowered:
+        return {"symbol": None, "topic": "crypto regulation"}
+    if "ai" in padded or "artificial intelligence" in lowered:
+        return {"symbol": None, "topic": "artificial intelligence"}
+    if "cloud" in lowered:
+        return {"symbol": None, "topic": "cloud infrastructure"}
+    return {"symbol": None, "topic": fallback_topic}
+
+
+def _classify_reddit_post(title: str, selftext: str, subreddit: str, link_flair_text: str | None) -> dict:
+    text = " ".join(
+        part for part in (title.lower(), selftext.lower(), subreddit.lower(), (link_flair_text or "").lower()) if part
+    )
+    normalized_subreddit = subreddit.replace("_", " ").strip().lower() or "crypto discussion"
+    return _classify_symbol_and_topic(text, fallback_topic=normalized_subreddit)
 
 
 def _score_reddit_activity(score: int, num_comments: int) -> float:
@@ -113,10 +133,10 @@ def _score_reddit_anomaly(score: int, num_comments: int, upvote_ratio: float | N
 
 
 def adapt_reddit_post(item: dict, *, fetched_at: str, listing_url: str) -> dict:
-    title = _require_reddit_text(item, "title")
-    subreddit = _require_reddit_text(item, "subreddit")
-    permalink = _require_reddit_text(item, "permalink")
-    timestamp = normalize_reddit_created_utc(item.get("created_utc"))
+    title = _require_text(item, "title", prefix="reddit item")
+    subreddit = _require_text(item, "subreddit", prefix="reddit item")
+    permalink = _require_text(item, "permalink", prefix="reddit item")
+    timestamp = normalize_epoch_seconds_to_utc_z(item.get("created_utc"), prefix="reddit item", field_name="created_utc")
     selftext = str(item.get("selftext") or "").strip()
     link_flair_text = str(item.get("link_flair_text") or "").strip() or None
 
@@ -125,10 +145,14 @@ def adapt_reddit_post(item: dict, *, fetched_at: str, listing_url: str) -> dict:
     score_raw = item.get("score")
     score = int(score_raw) if isinstance(score_raw, int) else 0
     upvote_ratio_raw = item.get("upvote_ratio")
-    upvote_ratio = float(upvote_ratio_raw) if isinstance(upvote_ratio_raw, (int, float)) and not isinstance(upvote_ratio_raw, bool) else None
+    upvote_ratio = (
+        float(upvote_ratio_raw)
+        if isinstance(upvote_ratio_raw, (int, float)) and not isinstance(upvote_ratio_raw, bool)
+        else None
+    )
 
     classification = _classify_reddit_post(title, selftext, subreddit, link_flair_text)
-    positive_score, negative_score, neutral_score = _score_reddit_sentiment(" ".join(part for part in (title, selftext) if part))
+    positive_score, negative_score, neutral_score = _score_text_sentiment(" ".join(part for part in (title, selftext) if part))
     entity_key = classification["symbol"] or classification["topic"]
     post_id = str(item.get("id") or "").strip() or None
 
@@ -147,7 +171,7 @@ def adapt_reddit_post(item: dict, *, fetched_at: str, listing_url: str) -> dict:
             source="reddit",
             timestamp=timestamp,
             entity_key=entity_key,
-            post_id=post_id,
+            source_id=post_id,
             permalink=permalink,
         ),
         "metadata": {
@@ -167,12 +191,148 @@ def adapt_reddit_post(item: dict, *, fetched_at: str, listing_url: str) -> dict:
     return normalize_sns_signal_record(record, entry_name="reddit_subreddit_new_json_item")
 
 
+def build_youtube_channel_feed_url(channel_id: str) -> str:
+    normalized_channel_id = channel_id.strip()
+    if not normalized_channel_id:
+        raise ValueError("youtube channel_id must be a non-empty string")
+    return YOUTUBE_CHANNEL_FEED_URL_TEMPLATE.format(channel_id=normalized_channel_id)
+
+
+def parse_youtube_feed_items(xml_text: str, *, max_items: int) -> list[dict]:
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as error:
+        raise ValueError("failed to parse YouTube RSS XML") from error
+
+    items: list[dict] = []
+    for entry in root.findall(f"{ATOM_NAMESPACE}entry")[:max_items]:
+        link = entry.find(f"{ATOM_NAMESPACE}link")
+        author = entry.find(f"{ATOM_NAMESPACE}author")
+        items.append(
+            {
+                "video_id": entry.findtext(f"{YOUTUBE_NAMESPACE}videoId"),
+                "channel_id": entry.findtext(f"{YOUTUBE_NAMESPACE}channelId"),
+                "title": entry.findtext(f"{ATOM_NAMESPACE}title"),
+                "published_at": entry.findtext(f"{ATOM_NAMESPACE}published"),
+                "updated_at": entry.findtext(f"{ATOM_NAMESPACE}updated"),
+                "video_url": link.get("href") if link is not None else None,
+                "author_name": author.findtext(f"{ATOM_NAMESPACE}name") if author is not None else None,
+            }
+        )
+    return items
+
+
+def _youtube_activity_score(published_at: str, fetched_at: str) -> float:
+    published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    fetched = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    age_hours = max(0.0, (fetched - published).total_seconds() / 3600.0)
+    if age_hours <= 24:
+        return 0.9
+    if age_hours <= 72:
+        return 0.75
+    if age_hours <= 168:
+        return 0.6
+    return 0.4
+
+
+def _youtube_anomaly_score(text: str, *, publisher_type: str, theme_tags: list[str], group_theme: str) -> float:
+    base = 0.15
+    if publisher_type in {"startup", "exchange", "government", "regulator"}:
+        base += 0.15
+    if theme_tags:
+        base += min(0.2, 0.05 * len(theme_tags))
+    if any(keyword in text.lower() for keyword in ("bitcoin", "ethereum", "ai", "policy", "regulation", "launch")):
+        base += 0.2
+    if "crypto" in group_theme.lower() or "financial" in group_theme.lower():
+        base += 0.1
+    return min(1.0, base)
+
+
+def adapt_youtube_video(item: dict, *, fetched_at: str, channel_context: dict) -> dict:
+    title = _require_text(item, "title", prefix="youtube feed item")
+    video_id = _require_text(item, "video_id", prefix="youtube feed item")
+    feed_channel_id = _require_text(item, "channel_id", prefix="youtube feed item")
+    published_at = _require_text(item, "published_at", prefix="youtube feed item")
+    video_url = _require_text(item, "video_url", prefix="youtube feed item")
+    author_name = _require_text(item, "author_name", prefix="youtube feed item")
+
+    configured_channel_id = channel_context["channel_id"]
+    if feed_channel_id != configured_channel_id:
+        raise ValueError("youtube feed item channel_id does not match configured channel_id")
+
+    theme_tags = [str(tag).strip() for tag in channel_context.get("theme_tags", []) if str(tag).strip()]
+    fallback_topic = theme_tags[0] if theme_tags else channel_context["group_theme"]
+    classifier_text = " ".join(
+        [
+            title,
+            channel_context["channel_label"],
+            channel_context["group_label"],
+            channel_context["group_theme"],
+        ]
+    )
+    anomaly_text = " ".join([classifier_text, " ".join(theme_tags)])
+    classification = _classify_symbol_and_topic(classifier_text, fallback_topic=fallback_topic)
+    positive_score, negative_score, neutral_score = _score_text_sentiment(title)
+    publisher_type = channel_context["publisher_type"]
+
+    record = {
+        "source": "youtube",
+        "symbol": classification["symbol"],
+        "topic": classification["topic"],
+        "timestamp": published_at,
+        "mention_count": 1,
+        "positive_score": positive_score,
+        "negative_score": negative_score,
+        "neutral_score": neutral_score,
+        "activity_score": _youtube_activity_score(published_at, fetched_at),
+        "anomaly_score": _youtube_anomaly_score(
+            anomaly_text,
+            publisher_type=publisher_type,
+            theme_tags=theme_tags,
+            group_theme=channel_context["group_theme"],
+        ),
+        "dedup_key": build_sns_dedup_key(
+            source="youtube",
+            timestamp=published_at,
+            entity_key=classification["symbol"] or classification["topic"],
+            source_id=video_id,
+            permalink=video_url,
+        ),
+        "metadata": {
+            "collector_source": "youtube_channel_rss",
+            "fetched_at": fetched_at,
+            "source_id": video_id,
+            "permalink": video_url,
+            "title": title,
+            "author_name": author_name,
+            "group_id": channel_context["group_id"],
+            "group_label": channel_context["group_label"],
+            "group_theme": channel_context["group_theme"],
+            "group_publisher_type": channel_context["group_publisher_type"],
+            "publisher_type": publisher_type,
+            "channel_id": configured_channel_id,
+            "channel_label": channel_context["channel_label"],
+            "theme_tags": theme_tags,
+            "feed_url": channel_context["feed_url"],
+            "updated_at": item.get("updated_at"),
+        },
+    }
+    return normalize_sns_signal_record(record, entry_name="youtube_channel_rss_item")
+
+
 SNS_SOURCE_PROFILES = {
     "reddit_subreddit_new_json": {
+        "kind": "reddit",
         "default_listing_url": REDDIT_SUBREDDIT_NEW_JSON_URL,
         "required_item_fields": ("id", "title", "subreddit", "permalink", "created_utc"),
         "tracked_optional_item_fields": ("num_comments", "score", "upvote_ratio", "link_flair_text"),
         "adapter": adapt_reddit_post,
+    },
+    "youtube_channel_rss": {
+        "kind": "youtube",
+        "required_item_fields": ("video_id", "channel_id", "title", "published_at", "video_url", "author_name"),
+        "tracked_optional_item_fields": ("updated_at",),
+        "adapter": adapt_youtube_video,
     },
 }
 
@@ -180,7 +340,11 @@ SNS_SOURCE_PROFILES = {
 __all__ = [
     "REDDIT_SUBREDDIT_NEW_JSON_URL",
     "SNS_SOURCE_PROFILES",
+    "YOUTUBE_CHANNEL_FEED_URL_TEMPLATE",
     "adapt_reddit_post",
+    "adapt_youtube_video",
     "build_sns_dedup_key",
-    "normalize_reddit_created_utc",
+    "build_youtube_channel_feed_url",
+    "normalize_epoch_seconds_to_utc_z",
+    "parse_youtube_feed_items",
 ]

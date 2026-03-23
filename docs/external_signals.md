@@ -102,13 +102,19 @@ News 候補:
 
 ## Minimal SNS Collector
 
-今回の collector は `reddit_subreddit_new_json` の 1 ソースだけを対象にします。利用は Reddit の公開 listing JSON に対する GET のみで、raw JSON は保存しません。
+今回の collector は `reddit_subreddit_new_json` と `youtube_channel_rss` を対象にします。どちらも公開 endpoint への GET のみで、raw payload は保存しません。
 
 採用した 1 本目:
 
 - `reddit_subreddit_new_json`
 - listing URL: `https://www.reddit.com/r/CryptoCurrency/new.json`
 - 選定理由: 無料公開 JSON で取得でき、post 単位の timestamp / title / comment count / score を持つため、`sns_signals` の最小 schema と observation を検証しやすいため
+
+採用した 2 本目:
+
+- `youtube_channel_rss`
+- feed URL pattern: `https://www.youtube.com/feeds/videos.xml?channel_id=<channel_id>`
+- 選定理由: コメントではなく発信者側の upload を直接拾え、複数 channel を 1 source run に束ねても `sns_signals` と observation が崩れないかを検証しやすいため
 
 今回の割り切り:
 
@@ -117,17 +123,43 @@ News 候補:
 - sentiment / activity / anomaly は収集導線確認用の簡易ヒューリスティクス
 - BTC / ETH だけ symbol 推定し、それ以外は topic-only を基本にする
 
+YouTube 側のデータ構造:
+
+- `group_theme`: 何の分野を見る group か
+- `publisher_type`: どういう主体が発信しているか
+- `groups[]`: source run で束ねる channel 群
+- `channels[]`: `channel_id` / `channel_label` / `publisher_type` / `theme_tags` / `enabled`
+
+`group_theme` と `publisher_type` を分ける理由:
+
+- 同じ分野でも、政府・大学・企業・メディアで発信の意味が異なるため
+- 今後 group を増やしても、分野軸と主体軸を別々に観測できるため
+- channel 単位で publisher_type を変えても、group 側の大きな分野分類を維持できるため
+
+YouTube 側の最初の group:
+
+- `crypto_investing_finance`: 市場・暗号資産・金融の空気を広く拾う
+- `public_institutions`: 制度・政策・研究の原始的発信を見る
+- `enterprises`: 大企業と成長企業の技術・クラウド・基盤投資を見る
+
+YouTube 側の partial failure 方針:
+
+- 一部 channel が失敗しても、他 channel から正規化済み record を作れた場合は run 全体を `completed` とする
+- 失敗 channel は `warnings` と `errors` に残す
+- 全 channel が取得失敗した場合のみ run 全体を `failed` とする
+
 責務分離:
 
-- collector: listing JSON GET と `children[].data` 抽出
-- adapter: Reddit post を `sns_signals` schema へ正規化
+- collector: Reddit listing JSON / YouTube channel RSS の GET と item 抽出
+- adapter: Reddit post / YouTube upload を `sns_signals` schema へ正規化
 - save: 正規化後 bundle と観測 summary のみ保存
-- observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、source/symbol/topic 分布、mention_count 要約、timestamp 分布、warning、error を集計
+- observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、source/group/group_theme/publisher_type/channel/symbol/topic 分布、mention_count 要約、timestamp 分布、warning、error を集計
 
 source ごとの切り分け:
 
-- 共通: fetch、JSON parse、保存、run_id 生成、observation 集計
-- source 固有: listing URL、post adapter、symbol/topic 判定、簡易 score ヒューリスティクス
+- 共通: fetch、保存、run_id 生成、observation 集計
+- Reddit 固有: listing URL、JSON parse、post adapter
+- YouTube 固有: channel feed URL、Atom feed parse、upload adapter、group/channel config 解釈
 - source 固有で吸収しきれない差分は `metadata` に逃がす
 
 adapter 境界:
@@ -135,6 +167,7 @@ adapter 境界:
 - 共通 collector 本体: [src/trade_simulator/sns_collector.py](/home/kuru0101/crypto_simulator/crypto_simulator/src/trade_simulator/sns_collector.py)
 - source adapter 群: [src/trade_simulator/sns_adapters.py](/home/kuru0101/crypto_simulator/crypto_simulator/src/trade_simulator/sns_adapters.py)
 - Reddit の `created_utc` 正規化、topic/symbol 推定、`mention_count` / score 群の簡易生成は adapter 側で吸収する
+- YouTube の `published` 正規化、group/channel metadata 付与、topic/symbol 推定、簡易 score 生成も adapter 側で吸収する
 - collector 側は source registry を見て adapter を呼び、共通保存と observation 集計だけを担当する
 
 dedup key の生成規則:
@@ -149,11 +182,14 @@ dedup key の生成規則:
 実行:
 
 - `python3 scripts/run_sns_collector.py --config config/sns_collector.reddit.example.json`
+- `python3 scripts/run_sns_collector.py --config config/sns_collector.youtube.example.json`
 
 保存:
 
 - `var/sns_signals/reddit_subreddit_new_json/<run_id>/normalized.json`
 - `var/sns_signals/reddit_subreddit_new_json/<run_id>/summary.json`
+- `var/sns_signals/youtube_channel_rss/<run_id>/normalized.json`
+- `var/sns_signals/youtube_channel_rss/<run_id>/summary.json`
 
 観測できる項目:
 
@@ -172,6 +208,10 @@ dedup key の生成規則:
 - `duplicate_count`
 - `missing_field_counts`
 - `source_distribution`
+- `group_distribution`
+- `group_theme_distribution`
+- `publisher_type_distribution`
+- `channel_distribution`
 - `symbol_distribution`
 - `topic_distribution`
 - `mention_count_summary`
@@ -187,6 +227,8 @@ source 増加で見えた制約:
 - topic / symbol 推定は source 依存が強く、今回は BTC / ETH 以外を topic-only に寄せている
 - sentiment / activity / anomaly は簡易ヒューリスティクスであり、分析用スコアの完成形ではない
 - Reddit 固有の rate limit や listing 粒度差分を吸収する共通抽象はまだ持たない
+- YouTube では channel upload 自体を 1 mention とみなしており、視聴者反応や動画性能は使っていない
+- group は config 主導なので、group_theme の粒度がぶれると observation の比較軸もぶれる
 
 ## Minimal News Collector
 

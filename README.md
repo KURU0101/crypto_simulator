@@ -91,6 +91,7 @@ python3 scripts/run_news_collector.py --config config/news_collector.federal_res
 ```bash
 source .venv/bin/activate
 python3 scripts/run_sns_collector.py --config config/sns_collector.reddit.example.json
+python3 scripts/run_sns_collector.py --config config/sns_collector.youtube.example.json
 ```
 
 `Makefile` を使う場合:
@@ -230,6 +231,8 @@ News は `source` / `published_at` / `headline` / `relevance_score` / `sentiment
 最小 news collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` をサポートし、いずれも RSS GET のみを行います。source ごとの adapter は collector 本体から分離し、保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/news_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `category_distribution` と `duplicate_count` を含む観測を残します。
 
 最小 SNS collector は `reddit_subreddit_new_json` をサポートし、Reddit の公開 listing JSON を GET して `sns_signals` schema に正規化します。保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/sns_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `mention_count_summary` と `duplicate_count` を含む観測を残します。
+
+YouTube 側の最小 collector は `youtube_channel_rss` をサポートし、複数 channel の公開 RSS を 1 run に束ねて `sns_signals` schema に正規化します。config では `groups[]` に `group_id` / `group_label` / `group_theme` / `publisher_type` / `channels[]` を持たせ、channel 単位では `channel_id` / `channel_label` / `publisher_type` / `theme_tags` を管理します。record の group/channel 情報は `metadata` に残し、summary では `group_distribution` / `group_theme_distribution` / `publisher_type_distribution` / `channel_distribution` を観測できます。
 
 サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
 設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。

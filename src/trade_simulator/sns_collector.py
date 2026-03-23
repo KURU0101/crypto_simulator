@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from trade_simulator.sns_adapters import REDDIT_SUBREDDIT_NEW_JSON_URL, SNS_SOURCE_PROFILES
+from trade_simulator.sns_adapters import (
+    REDDIT_SUBREDDIT_NEW_JSON_URL,
+    SNS_SOURCE_PROFILES,
+    build_youtube_channel_feed_url,
+    parse_youtube_feed_items,
+)
 from trade_simulator.sns_signals import build_sns_signal_bundle
 
 
@@ -44,8 +49,17 @@ def _validate_non_empty_string(value: object, name: str) -> str:
     return normalized
 
 
-def fetch_reddit_listing(
-    listing_url: str,
+def _validate_string_list(value: object, name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise TypeError(f"{name} must be a list")
+    normalized: list[str] = []
+    for index, item in enumerate(value):
+        normalized.append(_validate_non_empty_string(item, f"{name}[{index}]"))
+    return normalized
+
+
+def fetch_sns_text(
+    url: str,
     *,
     timeout_seconds: int,
     urlopen_fn: Callable[..., object] | None = None,
@@ -54,8 +68,8 @@ def fetch_reddit_listing(
         urlopen_fn = urllib.request.urlopen
 
     request = urllib.request.Request(
-        listing_url,
-        headers={"User-Agent": "trade-simulator-sns-collector/0.1"},
+        url,
+        headers={"User-Agent": "trade-simulator-sns-collector/0.2"},
         method="GET",
     )
 
@@ -65,11 +79,11 @@ def fetch_reddit_listing(
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="ignore")
         detail = f": {body}" if body else ""
-        raise SnsCollectorError(f"failed to fetch SNS listing: HTTP {error.code}{detail}") from error
+        raise SnsCollectorError(f"failed to fetch SNS source: HTTP {error.code}{detail}") from error
     except urllib.error.URLError as error:
-        raise SnsCollectorError(f"failed to fetch SNS listing: {error.reason}") from error
+        raise SnsCollectorError(f"failed to fetch SNS source: {error.reason}") from error
     except TimeoutError as error:
-        raise SnsCollectorError("failed to fetch SNS listing: timeout") from error
+        raise SnsCollectorError("failed to fetch SNS source: timeout") from error
 
     try:
         return payload.decode("utf-8")
@@ -103,6 +117,47 @@ def parse_reddit_listing_items(json_text: str, *, max_items: int) -> list[dict]:
     return items
 
 
+def _validate_youtube_channel(channel: object, *, group_name: str, index: int, group_defaults: dict) -> dict:
+    if not isinstance(channel, dict):
+        raise TypeError(f"{group_name}.channels[{index}] must be a dict")
+    normalized = dict(channel)
+    normalized["channel_id"] = _validate_non_empty_string(normalized.get("channel_id"), f"{group_name}.channels[{index}].channel_id")
+    normalized["channel_label"] = _validate_non_empty_string(
+        normalized.get("channel_label"),
+        f"{group_name}.channels[{index}].channel_label",
+    )
+    normalized["publisher_type"] = _validate_non_empty_string(
+        normalized.get("publisher_type", group_defaults["publisher_type"]),
+        f"{group_name}.channels[{index}].publisher_type",
+    )
+    normalized["theme_tags"] = _validate_string_list(
+        normalized.get("theme_tags", [group_defaults["group_theme"]]),
+        f"{group_name}.channels[{index}].theme_tags",
+    )
+    normalized["enabled"] = bool(normalized.get("enabled", True))
+    normalized["feed_url"] = build_youtube_channel_feed_url(normalized["channel_id"])
+    return normalized
+
+
+def _validate_youtube_group(group: object, *, index: int) -> dict:
+    if not isinstance(group, dict):
+        raise TypeError(f"collector.groups[{index}] must be a dict")
+    normalized = dict(group)
+    group_name = f"collector.groups[{index}]"
+    normalized["group_id"] = _validate_non_empty_string(normalized.get("group_id"), f"{group_name}.group_id")
+    normalized["group_label"] = _validate_non_empty_string(normalized.get("group_label"), f"{group_name}.group_label")
+    normalized["group_theme"] = _validate_non_empty_string(normalized.get("group_theme"), f"{group_name}.group_theme")
+    normalized["publisher_type"] = _validate_non_empty_string(normalized.get("publisher_type"), f"{group_name}.publisher_type")
+    channels = normalized.get("channels")
+    if not isinstance(channels, list) or not channels:
+        raise ValueError(f"{group_name}.channels must be a non-empty list")
+    normalized["channels"] = [
+        _validate_youtube_channel(channel, group_name=group_name, index=channel_index, group_defaults=normalized)
+        for channel_index, channel in enumerate(channels)
+    ]
+    return normalized
+
+
 def load_sns_collector_config(config: object) -> dict:
     if not isinstance(config, dict):
         raise ValueError("sns collector config must be a dict")
@@ -120,12 +175,22 @@ def load_sns_collector_config(config: object) -> dict:
         raise ValueError(f"collector.source must be one of: {supported}")
 
     profile = SNS_SOURCE_PROFILES[collector["source"]]
-    collector["listing_url"] = _validate_non_empty_string(
-        collector.get("listing_url", profile["default_listing_url"]),
-        "collector.listing_url",
-    )
     collector["timeout_seconds"] = _validate_positive_int(collector.get("timeout_seconds", 30), "collector.timeout_seconds")
-    collector["max_items"] = _validate_positive_int(collector.get("max_items", 50), "collector.max_items")
+    default_max_items = 50 if profile["kind"] == "reddit" else 20
+    collector["max_items"] = _validate_positive_int(collector.get("max_items", default_max_items), "collector.max_items")
+
+    if profile["kind"] == "reddit":
+        collector["listing_url"] = _validate_non_empty_string(
+            collector.get("listing_url", profile["default_listing_url"]),
+            "collector.listing_url",
+        )
+    elif profile["kind"] == "youtube":
+        groups = collector.get("groups")
+        if not isinstance(groups, list) or not groups:
+            raise ValueError("collector.groups must be a non-empty list")
+        collector["groups"] = [_validate_youtube_group(group, index=index) for index, group in enumerate(groups)]
+    else:
+        raise ValueError(f"unsupported sns collector kind: {profile['kind']}")
 
     output["output_dir"] = _validate_non_empty_string(output.get("output_dir"), "output.output_dir")
     output["save_run_summary"] = bool(output.get("save_run_summary", True))
@@ -136,13 +201,12 @@ def load_sns_collector_config(config: object) -> dict:
     }
 
 
-def _empty_observation(*, source: str, listing_url: str, started_at: str) -> dict:
-    return {
+def _empty_observation(*, source: str, started_at: str, listing_url: str | None = None) -> dict:
+    observation = {
         "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
         "signal_type": "sns",
         "source": source,
-        "listing_url": listing_url,
         "started_at": started_at,
         "ended_at": started_at,
         "duration_seconds": 0.0,
@@ -154,6 +218,10 @@ def _empty_observation(*, source: str, listing_url: str, started_at: str) -> dic
         "duplicate_count": 0,
         "missing_field_counts": {},
         "source_distribution": {},
+        "group_distribution": {},
+        "group_theme_distribution": {},
+        "publisher_type_distribution": {},
+        "channel_distribution": {},
         "symbol_distribution": {},
         "topic_distribution": {},
         "mention_count_summary": {"min": None, "max": None, "average": None, "total": 0},
@@ -163,12 +231,14 @@ def _empty_observation(*, source: str, listing_url: str, started_at: str) -> dic
         "errors": [],
         "saved_paths": {},
     }
+    if listing_url is not None:
+        observation["listing_url"] = listing_url
+    return observation
 
 
 def _build_observation(
     *,
     source: str,
-    listing_url: str,
     started_at: str,
     ended_at: str,
     fetched_item_count: int,
@@ -177,8 +247,13 @@ def _build_observation(
     missing_field_counts: dict[str, int],
     saved_paths: dict[str, str],
     warnings: list[str],
+    source_context: dict | None = None,
 ) -> dict:
     source_distribution: dict[str, int] = {}
+    group_distribution: dict[str, int] = {}
+    group_theme_distribution: dict[str, int] = {}
+    publisher_type_distribution: dict[str, int] = {}
+    channel_distribution: dict[str, int] = {}
     symbol_distribution: dict[str, int] = {}
     topic_distribution: dict[str, int] = {}
     timestamp_by_date: dict[str, int] = {}
@@ -188,6 +263,18 @@ def _build_observation(
 
     for record in normalized_records:
         source_distribution[record["source"]] = source_distribution.get(record["source"], 0) + 1
+        metadata = record.get("metadata", {})
+        if metadata.get("group_id"):
+            group_distribution[metadata["group_id"]] = group_distribution.get(metadata["group_id"], 0) + 1
+        if metadata.get("group_theme"):
+            group_theme_distribution[metadata["group_theme"]] = group_theme_distribution.get(metadata["group_theme"], 0) + 1
+        if metadata.get("publisher_type"):
+            publisher_type_distribution[metadata["publisher_type"]] = (
+                publisher_type_distribution.get(metadata["publisher_type"], 0) + 1
+            )
+        if metadata.get("channel_id"):
+            channel_key = f"{metadata['channel_label']} ({metadata['channel_id']})"
+            channel_distribution[channel_key] = channel_distribution.get(channel_key, 0) + 1
         if record["symbol"] is not None:
             symbol_distribution[record["symbol"]] = symbol_distribution.get(record["symbol"], 0) + 1
         if record["topic"] is not None:
@@ -210,12 +297,11 @@ def _build_observation(
         "total": sum(mention_counts),
     }
 
-    return {
+    observation = {
         "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
         "signal_type": "sns",
         "source": source,
-        "listing_url": listing_url,
         "started_at": started_at,
         "ended_at": ended_at,
         "duration_seconds": (ended_at_dt - started_at_dt).total_seconds(),
@@ -227,6 +313,10 @@ def _build_observation(
         "duplicate_count": len(normalized_records) - len(unique_dedup_keys),
         "missing_field_counts": missing_field_counts,
         "source_distribution": source_distribution,
+        "group_distribution": group_distribution,
+        "group_theme_distribution": group_theme_distribution,
+        "publisher_type_distribution": publisher_type_distribution,
+        "channel_distribution": channel_distribution,
         "symbol_distribution": symbol_distribution,
         "topic_distribution": topic_distribution,
         "mention_count_summary": mention_count_summary,
@@ -236,6 +326,9 @@ def _build_observation(
         "errors": normalized_failures,
         "saved_paths": saved_paths,
     }
+    if source_context:
+        observation.update(source_context)
+    return observation
 
 
 def save_sns_collection_run(
@@ -267,22 +360,14 @@ def save_sns_collection_run(
     return saved_paths
 
 
-def run_sns_collector(
-    config: dict,
+def _run_reddit_sns_collector(
+    collector: dict,
+    output: dict,
+    profile: dict,
     *,
-    fetch_listing_fn: Callable[..., str] | None = None,
-    now_fn: Callable[[], float] | None = None,
+    fetch_text_fn: Callable[..., str],
+    now_fn: Callable[[], float],
 ) -> dict:
-    validated = load_sns_collector_config(config)
-    collector = validated["collector"]
-    output = validated["output"]
-    profile = SNS_SOURCE_PROFILES[collector["source"]]
-
-    if fetch_listing_fn is None:
-        fetch_listing_fn = fetch_reddit_listing
-    if now_fn is None:
-        now_fn = time.time
-
     started_at = _utc_now_iso(now_fn)
     empty_observation = _empty_observation(
         source=collector["source"],
@@ -291,7 +376,7 @@ def run_sns_collector(
     )
 
     try:
-        listing_text = fetch_listing_fn(
+        listing_text = fetch_text_fn(
             collector["listing_url"],
             timeout_seconds=collector["timeout_seconds"],
         )
@@ -306,10 +391,7 @@ def run_sns_collector(
             - datetime.fromisoformat(started_at.replace("Z", "+00:00"))
         ).total_seconds()
         observation["errors"] = [{"message": str(error)}]
-        return {
-            "bundle": build_sns_signal_bundle([]),
-            "observation": observation,
-        }
+        return {"bundle": build_sns_signal_bundle([]), "observation": observation}
 
     tracked_fields = profile["required_item_fields"] + profile["tracked_optional_item_fields"]
     missing_field_counts = {field_name: 0 for field_name in tracked_fields}
@@ -321,32 +403,19 @@ def run_sns_collector(
             value = item.get(field_name)
             if value is None or (isinstance(value, str) and not value.strip()):
                 missing_field_counts[field_name] += 1
-
         try:
-            normalized_records.append(
-                profile["adapter"](
-                    item,
-                    fetched_at=started_at,
-                    listing_url=collector["listing_url"],
-                )
-            )
+            normalized_records.append(profile["adapter"](item, fetched_at=started_at, listing_url=collector["listing_url"]))
         except Exception as error:
-            normalized_failures.append(
-                {
-                    "item_index": index,
-                    "title": item.get("title"),
-                    "message": str(error),
-                }
-            )
+            normalized_failures.append({"item_index": index, "title": item.get("title"), "message": str(error)})
 
     warnings: list[str] = []
     if not items:
         warnings.append("SNS listing returned no items")
 
     bundle = build_sns_signal_bundle(normalized_records)
+    source_context = {"listing_url": collector["listing_url"]}
     provisional_observation = _build_observation(
         source=collector["source"],
-        listing_url=collector["listing_url"],
         started_at=started_at,
         ended_at=_utc_now_iso(now_fn),
         fetched_item_count=len(items),
@@ -355,6 +424,7 @@ def run_sns_collector(
         missing_field_counts=missing_field_counts,
         saved_paths={},
         warnings=warnings,
+        source_context=source_context,
     )
     saved_paths = save_sns_collection_run(
         bundle,
@@ -366,7 +436,6 @@ def run_sns_collector(
     )
     observation = _build_observation(
         source=collector["source"],
-        listing_url=collector["listing_url"],
         started_at=started_at,
         ended_at=_utc_now_iso(now_fn),
         fetched_item_count=len(items),
@@ -375,17 +444,196 @@ def run_sns_collector(
         missing_field_counts=missing_field_counts,
         saved_paths=saved_paths,
         warnings=warnings,
+        source_context=source_context,
     )
     if output["save_run_summary"] and "summary" in saved_paths:
         summary_path = Path(saved_paths["summary"])
         with summary_path.open("w", encoding="utf-8") as file:
             json.dump(observation, file, ensure_ascii=False, indent=2)
             file.write("\n")
+    return {"bundle": bundle, "observation": observation}
 
-    return {
-        "bundle": bundle,
-        "observation": observation,
+
+def _run_youtube_sns_collector(
+    collector: dict,
+    output: dict,
+    profile: dict,
+    *,
+    fetch_text_fn: Callable[..., str],
+    now_fn: Callable[[], float],
+) -> dict:
+    started_at = _utc_now_iso(now_fn)
+    configured_channels = [
+        {
+            "group_id": group["group_id"],
+            "group_label": group["group_label"],
+            "group_theme": group["group_theme"],
+            "group_publisher_type": group["publisher_type"],
+            **channel,
+        }
+        for group in collector["groups"]
+        for channel in group["channels"]
+        if channel["enabled"]
+    ]
+    source_context = {
+        "configured_group_count": len(collector["groups"]),
+        "configured_channel_count": len(configured_channels),
     }
+    empty_observation = _empty_observation(source=collector["source"], started_at=started_at)
+    empty_observation.update(source_context)
+
+    tracked_fields = profile["required_item_fields"] + profile["tracked_optional_item_fields"]
+    missing_field_counts = {field_name: 0 for field_name in tracked_fields}
+    normalized_records: list[dict] = []
+    normalized_failures: list[dict] = []
+    warnings: list[str] = []
+    fetched_item_count = 0
+    successful_channel_count = 0
+    failed_channel_count = 0
+    empty_channel_count = 0
+
+    for channel in configured_channels:
+        try:
+            feed_text = fetch_text_fn(channel["feed_url"], timeout_seconds=collector["timeout_seconds"])
+            items = parse_youtube_feed_items(feed_text, max_items=collector["max_items"])
+            successful_channel_count += 1
+        except Exception as error:
+            failed_channel_count += 1
+            normalized_failures.append(
+                {
+                    "channel_id": channel["channel_id"],
+                    "channel_label": channel["channel_label"],
+                    "group_id": channel["group_id"],
+                    "message": str(error),
+                }
+            )
+            continue
+
+        if not items:
+            empty_channel_count += 1
+            warnings.append(f"youtube channel returned no items: {channel['channel_label']} ({channel['channel_id']})")
+
+        fetched_item_count += len(items)
+        for index, item in enumerate(items):
+            for field_name in tracked_fields:
+                value = item.get(field_name)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    missing_field_counts[field_name] += 1
+            try:
+                normalized_records.append(profile["adapter"](item, fetched_at=started_at, channel_context=channel))
+            except Exception as error:
+                normalized_failures.append(
+                    {
+                        "channel_id": channel["channel_id"],
+                        "channel_label": channel["channel_label"],
+                        "group_id": channel["group_id"],
+                        "item_index": index,
+                        "title": item.get("title"),
+                        "message": str(error),
+                    }
+                )
+
+    source_context.update(
+        {
+            "successful_channel_count": successful_channel_count,
+            "failed_channel_count": failed_channel_count,
+            "empty_channel_count": empty_channel_count,
+        }
+    )
+
+    if failed_channel_count:
+        warnings.append(f"youtube channel fetch failures: {failed_channel_count}")
+    if not normalized_records and failed_channel_count == len(configured_channels):
+        ended_at = _utc_now_iso(now_fn)
+        observation = dict(empty_observation)
+        observation.update(source_context)
+        observation["status"] = "failed"
+        observation["ended_at"] = ended_at
+        observation["duration_seconds"] = (
+            datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+            - datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        ).total_seconds()
+        observation["warnings"] = warnings
+        observation["errors"] = normalized_failures
+        return {"bundle": build_sns_signal_bundle([]), "observation": observation}
+
+    bundle = build_sns_signal_bundle(normalized_records)
+    provisional_observation = _build_observation(
+        source=collector["source"],
+        started_at=started_at,
+        ended_at=_utc_now_iso(now_fn),
+        fetched_item_count=fetched_item_count,
+        normalized_records=normalized_records,
+        normalized_failures=normalized_failures,
+        missing_field_counts=missing_field_counts,
+        saved_paths={},
+        warnings=warnings,
+        source_context=source_context,
+    )
+    saved_paths = save_sns_collection_run(
+        bundle,
+        provisional_observation,
+        output_dir=output["output_dir"],
+        source=collector["source"],
+        started_at=started_at,
+        save_run_summary=output["save_run_summary"],
+    )
+    observation = _build_observation(
+        source=collector["source"],
+        started_at=started_at,
+        ended_at=_utc_now_iso(now_fn),
+        fetched_item_count=fetched_item_count,
+        normalized_records=normalized_records,
+        normalized_failures=normalized_failures,
+        missing_field_counts=missing_field_counts,
+        saved_paths=saved_paths,
+        warnings=warnings,
+        source_context=source_context,
+    )
+    if output["save_run_summary"] and "summary" in saved_paths:
+        summary_path = Path(saved_paths["summary"])
+        with summary_path.open("w", encoding="utf-8") as file:
+            json.dump(observation, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+    return {"bundle": bundle, "observation": observation}
+
+
+def run_sns_collector(
+    config: dict,
+    *,
+    fetch_text_fn: Callable[..., str] | None = None,
+    fetch_listing_fn: Callable[..., str] | None = None,
+    now_fn: Callable[[], float] | None = None,
+) -> dict:
+    validated = load_sns_collector_config(config)
+    collector = validated["collector"]
+    output = validated["output"]
+    profile = SNS_SOURCE_PROFILES[collector["source"]]
+
+    if fetch_text_fn is None:
+        fetch_text_fn = fetch_sns_text
+    if fetch_listing_fn is not None:
+        fetch_text_fn = fetch_listing_fn
+    if now_fn is None:
+        now_fn = time.time
+
+    if profile["kind"] == "reddit":
+        return _run_reddit_sns_collector(
+            collector,
+            output,
+            profile,
+            fetch_text_fn=fetch_text_fn,
+            now_fn=now_fn,
+        )
+    if profile["kind"] == "youtube":
+        return _run_youtube_sns_collector(
+            collector,
+            output,
+            profile,
+            fetch_text_fn=fetch_text_fn,
+            now_fn=now_fn,
+        )
+    raise ValueError(f"unsupported sns collector kind: {profile['kind']}")
 
 
 def build_sns_collector_parser() -> argparse.ArgumentParser:
@@ -399,7 +647,7 @@ __all__ = [
     "SNS_SOURCE_PROFILES",
     "SnsCollectorError",
     "build_sns_collector_parser",
-    "fetch_reddit_listing",
+    "fetch_sns_text",
     "load_sns_collector_config",
     "parse_reddit_listing_items",
     "run_sns_collector",
