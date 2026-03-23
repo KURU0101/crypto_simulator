@@ -1,52 +1,37 @@
 [
   {
-    "name": "aggressive_threshold",
-    "simulation_name": "aggressive_threshold",
-    "initial_cash": 1000000,
+    "name": "threshold_baseline",
+    "strategy": "threshold",
+    "simulation_name": "threshold_baseline",
+    "initial_cash": 100000,
     "fee_rate": 0.0,
     "slippage_rate": 0.0,
-    "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-    "entry_threshold": 0.003,
-    "exit_threshold": -0.003
-  },
-  {
-    "name": "moderate_threshold",
-    "simulation_name": "moderate_threshold",
-    "initial_cash": 1000000,
-    "fee_rate": 0.0,
-    "slippage_rate": 0.0,
-    "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-    "entry_threshold": 0.005,
-    "exit_threshold": -0.005
-  },
-  {
-    "name": "baseline_threshold",
-    "simulation_name": "baseline_threshold",
-    "initial_cash": 1000000,
-    "fee_rate": 0.0,
-    "slippage_rate": 0.0,
-    "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
+    "returns": [0.004, -0.006, -0.004, 0.006, -0.003, 0.012, -0.011, 0.008, -0.007, 0.01, -0.025, 0.009],
     "entry_threshold": 0.01,
     "exit_threshold": -0.01
   },
   {
-    "name": "conservative_threshold",
-    "simulation_name": "conservative_threshold",
-    "initial_cash": 1000000,
+    "name": "cumulative_drop_fast",
+    "strategy": "cumulative_drop",
+    "simulation_name": "cumulative_drop_fast",
+    "initial_cash": 100000,
     "fee_rate": 0.0,
     "slippage_rate": 0.0,
-    "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-    "entry_threshold": 0.02,
-    "exit_threshold": -0.02
+    "returns": [0.004, -0.006, -0.004, 0.006, -0.003, 0.012, -0.011, 0.008, -0.007, 0.01, -0.025, 0.009],
+    "entry_window": 3,
+    "entry_cumulative_threshold": -0.01,
+    "exit_threshold": 0.005
   },
   {
-    "name": "no_trade_threshold",
-    "simulation_name": "no_trade_threshold",
-    "initial_cash": 1000000,
+    "name": "cumulative_drop_strict",
+    "strategy": "cumulative_drop",
+    "simulation_name": "cumulative_drop_strict",
+    "initial_cash": 100000,
     "fee_rate": 0.0,
     "slippage_rate": 0.0,
-    "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-    "entry_threshold": 0.03,
-    "exit_threshold": -0.03
+    "returns": [0.004, -0.006, -0.004, 0.006, -0.003, 0.012, -0.011, 0.008, -0.007, 0.01, -0.025, 0.009],
+    "entry_window": 5,
+    "entry_cumulative_threshold": -0.026,
+    "exit_threshold": 0.0075
   }
 ]

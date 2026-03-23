@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from trade_simulator.signals import simulate_threshold_strategy
+from trade_simulator.signals import simulate_cumulative_drop_strategy, simulate_threshold_strategy
 from trade_simulator.simulation import simulate
 
 
@@ -22,22 +22,56 @@ def summarize_case_result(name: str, result: dict) -> dict:
         "average_holding_period": result["average_holding_period"],
     }
 
-    if "entry_threshold" in result and "exit_threshold" in result:
-        summary["entry_threshold"] = result["entry_threshold"]
+    if "strategy" in result:
+        summary["strategy"] = result["strategy"]
+
+    if "exit_threshold" in result:
         summary["exit_threshold"] = result["exit_threshold"]
+
+    if "entry_threshold" in result:
+        summary["entry_threshold"] = result["entry_threshold"]
+
+    if "entry_window" in result and "entry_cumulative_threshold" in result:
+        summary["entry_window"] = result["entry_window"]
+        summary["entry_cumulative_threshold"] = result["entry_cumulative_threshold"]
 
     return summary
 
 
 def run_case(case: dict) -> dict:
+    strategy = case.get("strategy")
+
+    if strategy == "manual":
+        if "entry_signals" in case and "exit_signals" in case:
+            return simulate(case)
+        raise ValueError("manual strategy requires entry_signals and exit_signals")
+
+    if strategy == "threshold":
+        if "entry_threshold" in case and "exit_threshold" in case:
+            return simulate_threshold_strategy(case)
+        raise ValueError("threshold strategy requires entry_threshold and exit_threshold")
+
+    if strategy == "cumulative_drop":
+        if all(key in case for key in ("entry_window", "entry_cumulative_threshold", "exit_threshold")):
+            return simulate_cumulative_drop_strategy(case)
+        raise ValueError(
+            "cumulative_drop strategy requires entry_window, entry_cumulative_threshold, and exit_threshold"
+        )
+
+    if strategy is not None:
+        raise ValueError("strategy must be one of manual, threshold, or cumulative_drop")
+
     if "entry_signals" in case and "exit_signals" in case:
         return simulate(case)
 
     if "entry_threshold" in case and "exit_threshold" in case:
         return simulate_threshold_strategy(case)
 
+    if all(key in case for key in ("entry_window", "entry_cumulative_threshold", "exit_threshold")):
+        return simulate_cumulative_drop_strategy(case)
+
     raise ValueError(
-        "each comparison case must include entry_signals and exit_signals or entry_threshold and exit_threshold"
+        "each comparison case must include manual signals, threshold parameters, or cumulative_drop parameters"
     )
 
 

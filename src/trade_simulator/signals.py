@@ -24,6 +24,14 @@ def _validate_returns(returns: object) -> list[float]:
     return validated_returns
 
 
+def _validate_positive_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an int")
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+    return value
+
+
 def generate_threshold_signals(
     returns: object,
     entry_threshold: object,
@@ -53,6 +61,57 @@ def generate_threshold_signals(
     return entry_signals, exit_signals
 
 
+def generate_cumulative_drop_signals(
+    returns: object,
+    entry_window: object,
+    entry_cumulative_threshold: object,
+    exit_threshold: object,
+) -> tuple[list[bool], list[bool]]:
+    validated_returns = _validate_returns(returns)
+    validated_entry_window = _validate_positive_int(entry_window, "entry_window")
+    validated_entry_cumulative_threshold = _validate_numeric(
+        entry_cumulative_threshold,
+        "entry_cumulative_threshold",
+    )
+    validated_exit_threshold = _validate_numeric(exit_threshold, "exit_threshold")
+
+    entry_signals = []
+    exit_signals = []
+    is_in_position = False
+
+    for period_index, period_return in enumerate(validated_returns):
+        if is_in_position:
+            should_exit = period_return >= validated_exit_threshold
+            entry_signals.append(False)
+            exit_signals.append(should_exit)
+            if should_exit:
+                is_in_position = False
+            continue
+
+        if period_index + 1 < validated_entry_window:
+            entry_signals.append(False)
+            exit_signals.append(False)
+            continue
+
+        cumulative_return = sum(
+            validated_returns[period_index - validated_entry_window + 1 : period_index + 1]
+        )
+        should_enter = cumulative_return <= validated_entry_cumulative_threshold
+        entry_signals.append(should_enter)
+        exit_signals.append(False)
+        if should_enter:
+            is_in_position = True
+
+    return entry_signals, exit_signals
+
+
+def _simulate_with_generated_signals(config: dict, entry_signals: list[bool], exit_signals: list[bool]) -> dict:
+    simulation_config = dict(config)
+    simulation_config["entry_signals"] = entry_signals
+    simulation_config["exit_signals"] = exit_signals
+    return simulate(simulation_config)
+
+
 def simulate_threshold_strategy(config: dict) -> dict:
     entry_signals, exit_signals = generate_threshold_signals(
         config["returns"],
@@ -60,11 +119,24 @@ def simulate_threshold_strategy(config: dict) -> dict:
         config["exit_threshold"],
     )
 
-    simulation_config = dict(config)
-    simulation_config["entry_signals"] = entry_signals
-    simulation_config["exit_signals"] = exit_signals
-
-    result = simulate(simulation_config)
+    result = _simulate_with_generated_signals(config, entry_signals, exit_signals)
+    result["strategy"] = "threshold"
     result["entry_threshold"] = float(config["entry_threshold"])
+    result["exit_threshold"] = float(config["exit_threshold"])
+    return result
+
+
+def simulate_cumulative_drop_strategy(config: dict) -> dict:
+    entry_signals, exit_signals = generate_cumulative_drop_signals(
+        config["returns"],
+        config["entry_window"],
+        config["entry_cumulative_threshold"],
+        config["exit_threshold"],
+    )
+
+    result = _simulate_with_generated_signals(config, entry_signals, exit_signals)
+    result["strategy"] = "cumulative_drop"
+    result["entry_window"] = int(config["entry_window"])
+    result["entry_cumulative_threshold"] = float(config["entry_cumulative_threshold"])
     result["exit_threshold"] = float(config["exit_threshold"])
     return result

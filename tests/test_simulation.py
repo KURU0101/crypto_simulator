@@ -4,7 +4,12 @@ import pytest
 from trade_simulator.comparison_cli import format_comparison_results, load_comparison_cases, main as comparison_main
 from trade_simulator.config import load_config
 from trade_simulator.comparison import run_case, run_comparisons, summarize_case_result
-from trade_simulator.signals import generate_threshold_signals, simulate_threshold_strategy
+from trade_simulator.signals import (
+    generate_cumulative_drop_signals,
+    generate_threshold_signals,
+    simulate_cumulative_drop_strategy,
+    simulate_threshold_strategy,
+)
 from trade_simulator.simulation import simulate
 
 
@@ -17,7 +22,7 @@ def test_load_config() -> None:
     config = load_config(config_path)
 
     assert config["simulation_name"] == "example_simulation"
-    assert config["initial_cash"] == 1000000
+    assert config["initial_cash"] == 100000
     assert config["fee_rate"] == 0.0
     assert config["slippage_rate"] == 0.0
     assert config["returns"] == [0.01, -0.02, 0.03, 0.01]
@@ -29,21 +34,23 @@ def test_load_comparison_config() -> None:
     config_path = Path("config/comparison.example.json")
     cases = load_config(config_path)
 
-    assert len(cases) == 5
-    assert cases[0]["name"] == "aggressive_threshold"
-    assert cases[0]["entry_threshold"] == 0.003
-    assert cases[2]["name"] == "baseline_threshold"
-    assert cases[3]["name"] == "conservative_threshold"
-    assert cases[4]["name"] == "no_trade_threshold"
-    assert cases[4]["entry_threshold"] == 0.03
+    assert len(cases) == 3
+    assert cases[0]["name"] == "threshold_baseline"
+    assert cases[0]["strategy"] == "threshold"
+    assert cases[1]["name"] == "cumulative_drop_fast"
+    assert cases[1]["strategy"] == "cumulative_drop"
+    assert cases[1]["entry_window"] == 3
+    assert cases[2]["name"] == "cumulative_drop_strict"
+    assert cases[2]["entry_cumulative_threshold"] == -0.026
+    assert all(case["initial_cash"] == 100000 for case in cases)
 
 
 def test_load_comparison_cases_accepts_root_list_config() -> None:
     cases = load_comparison_cases("config/comparison.example.json")
 
-    assert len(cases) == 5
-    assert cases[0]["name"] == "aggressive_threshold"
-    assert cases[-1]["name"] == "no_trade_threshold"
+    assert len(cases) == 3
+    assert cases[0]["name"] == "threshold_baseline"
+    assert cases[-1]["name"] == "cumulative_drop_strict"
 
 
 def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> None:
@@ -56,11 +63,13 @@ def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> N
               "name": "single",
               "simulation_name": "single",
               "initial_cash": 1000,
+              "strategy": "cumulative_drop",
               "fee_rate": 0.0,
               "slippage_rate": 0.0,
               "returns": [],
-              "entry_threshold": 0.01,
-              "exit_threshold": -0.01
+              "entry_window": 3,
+              "entry_cumulative_threshold": -0.01,
+              "exit_threshold": 0.005
             }
           ]
         }
@@ -75,11 +84,13 @@ def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> N
             "name": "single",
             "simulation_name": "single",
             "initial_cash": 1000,
+            "strategy": "cumulative_drop",
             "fee_rate": 0.0,
             "slippage_rate": 0.0,
             "returns": [],
-            "entry_threshold": 0.01,
-            "exit_threshold": -0.01,
+            "entry_window": 3,
+            "entry_cumulative_threshold": -0.01,
+            "exit_threshold": 0.005,
         }
     ]
 
@@ -172,6 +183,119 @@ def test_generate_threshold_signals_raises_for_invalid_returns_input() -> None:
         generate_threshold_signals([0.01, "bad"], 0.01, -0.01)
 
 
+def test_generate_cumulative_drop_signals_creates_entries_and_exits_from_cumulative_drop() -> None:
+    entry_signals, exit_signals = generate_cumulative_drop_signals(
+        [-0.002, -0.004, -0.005, 0.006, -0.003, -0.004, -0.004, 0.005],
+        3,
+        -0.01,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, True, False, False, False, True, False]
+    assert exit_signals == [False, False, False, True, False, False, False, True]
+
+
+def test_generate_cumulative_drop_signals_does_not_enter_before_window_is_ready() -> None:
+    entry_signals, exit_signals = generate_cumulative_drop_signals(
+        [-0.02, 0.01],
+        3,
+        -0.01,
+        0.005,
+    )
+
+    assert entry_signals == [False, False]
+    assert exit_signals == [False, False]
+
+
+def test_generate_cumulative_drop_signals_does_not_reenter_before_exit() -> None:
+    entry_signals, exit_signals = generate_cumulative_drop_signals(
+        [-0.004, -0.004, -0.004, -0.004, 0.006],
+        3,
+        -0.01,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, True, False, False]
+    assert exit_signals == [False, False, False, False, True]
+
+
+def test_generate_cumulative_drop_signals_allows_reentry_after_exit() -> None:
+    entry_signals, exit_signals = generate_cumulative_drop_signals(
+        [-0.004, -0.004, -0.004, 0.006, -0.005, -0.004, -0.004, 0.005],
+        3,
+        -0.01,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, True, False, False, False, True, False]
+    assert exit_signals == [False, False, False, True, False, False, False, True]
+
+
+def test_generate_cumulative_drop_signals_accepts_empty_returns() -> None:
+    entry_signals, exit_signals = generate_cumulative_drop_signals([], 3, -0.01, 0.005)
+
+    assert entry_signals == []
+    assert exit_signals == []
+
+
+def test_generate_cumulative_drop_signals_supports_window_one() -> None:
+    entry_signals, exit_signals = generate_cumulative_drop_signals(
+        [-0.01, 0.005],
+        1,
+        -0.01,
+        0.005,
+    )
+
+    assert entry_signals == [True, False]
+    assert exit_signals == [False, True]
+
+
+def test_generate_cumulative_drop_signals_handles_exact_threshold_matches() -> None:
+    entry_signals, exit_signals = generate_cumulative_drop_signals(
+        [-0.003, -0.003, -0.004, 0.005],
+        3,
+        -0.01,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, True, False]
+    assert exit_signals == [False, False, False, True]
+
+
+def test_generate_cumulative_drop_signals_returns_all_false_when_entry_never_occurs() -> None:
+    entry_signals, exit_signals = generate_cumulative_drop_signals(
+        [0.001, -0.001, 0.0, 0.002],
+        3,
+        -0.01,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, False, False]
+    assert exit_signals == [False, False, False, False]
+
+
+def test_generate_cumulative_drop_signals_raises_for_invalid_parameters() -> None:
+    with pytest.raises(TypeError, match="entry_window must be an int"):
+        generate_cumulative_drop_signals([0.01], 3.0, -0.01, 0.005)
+
+    with pytest.raises(ValueError, match="entry_window must be greater than 0"):
+        generate_cumulative_drop_signals([0.01], 0, -0.01, 0.005)
+
+    with pytest.raises(TypeError, match="entry_cumulative_threshold must be a number"):
+        generate_cumulative_drop_signals([0.01], 3, None, 0.005)
+
+    with pytest.raises(TypeError, match="exit_threshold must be a number"):
+        generate_cumulative_drop_signals([0.01], 3, -0.01, "0.005")
+
+
+def test_generate_cumulative_drop_signals_raises_for_invalid_returns_input() -> None:
+    with pytest.raises(TypeError, match="returns must be a list"):
+        generate_cumulative_drop_signals(None, 3, -0.01, 0.005)
+
+    with pytest.raises(TypeError, match=r"returns\[1\] must be a number"):
+        generate_cumulative_drop_signals([0.01, "bad"], 3, -0.01, 0.005)
+
+
 def test_simulate_threshold_strategy_connects_generated_signals_to_simulation() -> None:
     result = simulate_threshold_strategy(
         {
@@ -213,6 +337,70 @@ def test_simulate_threshold_strategy_handles_empty_returns() -> None:
     assert result["final_value"] == 1000.0
 
 
+def test_simulate_cumulative_drop_strategy_connects_generated_signals_to_simulation() -> None:
+    result = simulate_cumulative_drop_strategy(
+        {
+            "simulation_name": "cumulative_drop",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [-0.002, -0.004, -0.005, 0.006, -0.003, -0.004, -0.004, 0.005],
+            "entry_window": 3,
+            "entry_cumulative_threshold": -0.01,
+            "exit_threshold": 0.005,
+        }
+    )
+
+    assert result["strategy"] == "cumulative_drop"
+    assert result["entry_window"] == 3
+    assert result["entry_cumulative_threshold"] == -0.01
+    assert result["exit_threshold"] == 0.005
+    assert result["entry_signals"] == [False, False, True, False, False, False, True, False]
+    assert result["exit_signals"] == [False, False, False, True, False, False, False, True]
+    assert result["trade_count"] == 2
+    assert result["final_value"] == pytest.approx(991.02)
+    assert result["final_value"] == pytest.approx(result["equity_curve"][-1])
+
+
+def test_simulate_cumulative_drop_strategy_handles_empty_returns() -> None:
+    result = simulate_cumulative_drop_strategy(
+        {
+            "simulation_name": "cumulative_drop",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [],
+            "entry_window": 3,
+            "entry_cumulative_threshold": -0.01,
+            "exit_threshold": 0.005,
+        }
+    )
+
+    assert result["entry_signals"] == []
+    assert result["exit_signals"] == []
+    assert result["trade_count"] == 0
+    assert result["final_value"] == 1000.0
+
+
+def test_simulate_cumulative_drop_strategy_handles_unclosed_trade() -> None:
+    result = simulate_cumulative_drop_strategy(
+        {
+            "simulation_name": "cumulative_drop",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [-0.004, -0.004, -0.003, 0.001],
+            "entry_window": 3,
+            "entry_cumulative_threshold": -0.01,
+            "exit_threshold": 0.005,
+        }
+    )
+
+    assert result["trade_count"] == 1
+    assert result["trade_log"][0]["exited"] is False
+    assert result["final_value"] == pytest.approx(997.997)
+
+
 def test_run_case_supports_threshold_based_strategy_configs() -> None:
     result = run_case(
         {
@@ -230,13 +418,44 @@ def test_run_case_supports_threshold_based_strategy_configs() -> None:
     assert result["exit_signals"] == [False, True, False, False]
 
 
+def test_run_case_supports_cumulative_drop_strategy_configs() -> None:
+    result = run_case(
+        {
+            "strategy": "cumulative_drop",
+            "simulation_name": "cumulative_drop",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [-0.002, -0.004, -0.005, 0.006],
+            "entry_window": 3,
+            "entry_cumulative_threshold": -0.01,
+            "exit_threshold": 0.005,
+        }
+    )
+
+    assert result["entry_signals"] == [False, False, True, False]
+    assert result["exit_signals"] == [False, False, False, True]
+
+
 def test_run_case_raises_when_strategy_inputs_are_missing() -> None:
     with pytest.raises(
         ValueError,
-        match="each comparison case must include entry_signals and exit_signals or entry_threshold and exit_threshold",
+        match="each comparison case must include manual signals, threshold parameters, or cumulative_drop parameters",
     ):
         run_case(
             {
+                "simulation_name": "invalid",
+                "initial_cash": 1000,
+                "returns": [0.01],
+            }
+        )
+
+
+def test_run_case_raises_for_invalid_strategy_name() -> None:
+    with pytest.raises(ValueError, match="strategy must be one of manual, threshold, or cumulative_drop"):
+        run_case(
+            {
+                "strategy": "unknown",
                 "simulation_name": "invalid",
                 "initial_cash": 1000,
                 "returns": [0.01],
@@ -986,114 +1205,64 @@ def test_run_comparisons_handles_single_zero_summary_case() -> None:
     ]
 
 
-def test_run_comparisons_supports_threshold_cases_with_different_results() -> None:
-    cases = [
-        {
-            "name": "aggressive_threshold",
-            "simulation_name": "aggressive_threshold",
-            "initial_cash": 1000,
-            "fee_rate": 0.0,
-            "slippage_rate": 0.0,
-            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-            "entry_threshold": 0.003,
-            "exit_threshold": -0.003,
-        },
-        {
-            "name": "moderate_threshold",
-            "simulation_name": "moderate_threshold",
-            "initial_cash": 1000,
-            "fee_rate": 0.0,
-            "slippage_rate": 0.0,
-            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-            "entry_threshold": 0.005,
-            "exit_threshold": -0.005,
-        },
-        {
-            "name": "baseline_threshold",
-            "simulation_name": "baseline_threshold",
-            "initial_cash": 1000,
-            "fee_rate": 0.0,
-            "slippage_rate": 0.0,
-            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-            "entry_threshold": 0.01,
-            "exit_threshold": -0.01,
-        },
-        {
-            "name": "conservative_threshold",
-            "simulation_name": "conservative_threshold",
-            "initial_cash": 1000,
-            "fee_rate": 0.0,
-            "slippage_rate": 0.0,
-            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-            "entry_threshold": 0.02,
-            "exit_threshold": -0.02,
-        },
-        {
-            "name": "no_trade_threshold",
-            "simulation_name": "no_trade_threshold",
-            "initial_cash": 1000,
-            "fee_rate": 0.0,
-            "slippage_rate": 0.0,
-            "returns": [0.004, -0.004, 0.006, -0.006, 0.012, -0.006, -0.007, -0.011, 0.021, -0.025],
-            "entry_threshold": 0.03,
-            "exit_threshold": -0.03,
-        },
-    ]
-
+def test_run_comparisons_supports_mixed_threshold_and_cumulative_drop_cases() -> None:
+    cases = load_config(Path("config/comparison.example.json"))
     comparisons = run_comparisons(cases)
 
     assert [comparison["name"] for comparison in comparisons] == [
-        "aggressive_threshold",
-        "moderate_threshold",
-        "baseline_threshold",
-        "conservative_threshold",
-        "no_trade_threshold",
+        "threshold_baseline",
+        "cumulative_drop_fast",
+        "cumulative_drop_strict",
     ]
-    assert [comparison["trade_count"] for comparison in comparisons] == [4, 3, 2, 1, 0]
-    assert [comparison["win_rate"] for comparison in comparisons] == [1.0, 1.0, 0.5, 1.0, 0.0]
-    assert [comparison["entry_threshold"] for comparison in comparisons] == [0.003, 0.005, 0.01, 0.02, 0.03]
-    assert [comparison["exit_threshold"] for comparison in comparisons] == [-0.003, -0.005, -0.01, -0.02, -0.03]
-    assert [comparison["final_value"] for comparison in comparisons] == pytest.approx(
-        [1043.609318048, 1039.4515119999999, 1019.8631205839999, 1020.9999999999999, 1000.0]
-    )
-    assert [comparison["realized_pnl_total"] for comparison in comparisons] == pytest.approx(
-        [43.60931804799998, 39.451511999999866, 19.863120583999902, 20.999999999999886, 0.0]
-    )
-    assert [comparison["average_holding_period"] for comparison in comparisons] == [1.0, 1.0, 2.0, 1.0, 0.0]
-    assert comparisons[0]["trade_count"] > comparisons[1]["trade_count"] > comparisons[2]["trade_count"]
-    assert comparisons[2]["win_rate"] < comparisons[0]["win_rate"]
-    assert comparisons[-1]["trade_count"] == 0
+    assert [comparison["strategy"] for comparison in comparisons] == [
+        "threshold",
+        "cumulative_drop",
+        "cumulative_drop",
+    ]
+    assert comparisons[1]["trade_count"] >= comparisons[2]["trade_count"]
+    assert comparisons[0]["final_value"] != comparisons[1]["final_value"]
+    assert comparisons[1]["entry_window"] == 3
+    assert comparisons[2]["entry_window"] == 5
+    assert comparisons[0]["entry_threshold"] == 0.01
+    assert comparisons[1]["entry_cumulative_threshold"] == -0.01
+    assert comparisons[2]["entry_cumulative_threshold"] == -0.026
+    assert comparisons[2]["trade_count"] == 0
+    assert comparisons[2]["final_value"] == 100000.0
 
 
-def test_run_comparisons_allows_threshold_sensitivity_case_with_unclosed_trade() -> None:
+def test_run_comparisons_allows_cumulative_drop_case_with_unclosed_trade() -> None:
     comparisons = run_comparisons(
         [
             {
-                "name": "open_trade_threshold",
-                "simulation_name": "open_trade_threshold",
+                "name": "open_trade_cumulative_drop",
+                "strategy": "cumulative_drop",
+                "simulation_name": "open_trade_cumulative_drop",
                 "initial_cash": 1000,
                 "fee_rate": 0.0,
                 "slippage_rate": 0.0,
-                "returns": [0.012, 0.001, 0.002],
-                "entry_threshold": 0.01,
-                "exit_threshold": -0.01,
+                "returns": [-0.004, -0.004, -0.003, 0.001],
+                "entry_window": 3,
+                "entry_cumulative_threshold": -0.01,
+                "exit_threshold": 0.005,
             }
         ]
     )
 
     assert comparisons == [
         {
-            "name": "open_trade_threshold",
-            "final_value": 1015.038024,
+            "name": "open_trade_cumulative_drop",
+            "strategy": "cumulative_drop",
+            "final_value": pytest.approx(997.9969999999998),
             "trade_count": 1,
-            "periods_in_position": 3,
+            "periods_in_position": 2,
             "winning_trades": 0,
             "losing_trades": 0,
             "win_rate": 0.0,
             "realized_pnl_total": 0,
             "average_holding_period": 0.0,
-            "entry_threshold": 0.01,
-            "exit_threshold": -0.01,
+            "entry_window": 3,
+            "entry_cumulative_threshold": -0.01,
+            "exit_threshold": 0.005,
         }
     ]
 
@@ -1110,6 +1279,7 @@ def test_format_comparison_results_returns_json_with_summary_fields() -> None:
             "win_rate": 0.0,
             "realized_pnl_total": 0,
             "average_holding_period": 0.0,
+            "strategy": "threshold",
         }
     ]
 
@@ -1117,6 +1287,7 @@ def test_format_comparison_results_returns_json_with_summary_fields() -> None:
 
     assert '"name": "baseline"' in formatted
     assert '"final_value": 1000.0' in formatted
+    assert '"strategy": "threshold"' in formatted
     assert '"win_rate": 0.0' in formatted
     assert '"average_holding_period": 0.0' in formatted
 
@@ -1150,7 +1321,7 @@ def test_load_comparison_cases_raises_when_cases_is_not_a_list(tmp_path: Path) -
 def test_run_comparisons_raises_for_missing_threshold_pair() -> None:
     with pytest.raises(
         ValueError,
-        match="each comparison case must include entry_signals and exit_signals or entry_threshold and exit_threshold",
+        match="each comparison case must include manual signals, threshold parameters, or cumulative_drop parameters",
     ):
         run_comparisons(
             [
@@ -1176,6 +1347,41 @@ def test_run_comparisons_raises_for_invalid_threshold_type_case() -> None:
                     "returns": [0.01],
                     "entry_threshold": "0.01",
                     "exit_threshold": -0.01,
+                }
+            ]
+        )
+
+
+def test_run_comparisons_raises_for_missing_cumulative_drop_parameters() -> None:
+    with pytest.raises(
+        ValueError,
+        match="cumulative_drop strategy requires entry_window, entry_cumulative_threshold, and exit_threshold",
+    ):
+        run_comparisons(
+            [
+                {
+                    "name": "invalid_cumulative_drop_case",
+                    "strategy": "cumulative_drop",
+                    "simulation_name": "invalid_cumulative_drop_case",
+                    "initial_cash": 1000,
+                    "returns": [-0.01, -0.01],
+                    "entry_window": 3,
+                    "exit_threshold": 0.005,
+                }
+            ]
+        )
+
+
+def test_run_comparisons_raises_for_invalid_strategy_value() -> None:
+    with pytest.raises(ValueError, match="strategy must be one of manual, threshold, or cumulative_drop"):
+        run_comparisons(
+            [
+                {
+                    "name": "invalid_strategy_case",
+                    "strategy": "invalid",
+                    "simulation_name": "invalid_strategy_case",
+                    "initial_cash": 1000,
+                    "returns": [0.01],
                 }
             ]
         )
