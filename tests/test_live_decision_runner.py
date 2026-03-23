@@ -452,8 +452,10 @@ def test_live_decision_runner_summary_is_session_scoped_when_context_has_histori
     assert result["summary"]["losing_trades"] == 0
     assert result["summary"]["realized_pnl_total"] == 0.0
     assert result["summary"]["session_value_change"] == 0.0
-    assert result["summary"]["session_start_state"]["trade_count"] == 1
-    assert result["summary"]["session_end_state"]["total_trade_count"] == 1
+    assert result["summary"]["session_start_state"]["trade_count"] == 0
+    assert result["summary"]["session_start_state"]["equity"] == 1000
+    assert result["summary"]["session_start_state"]["cash"] == 1000
+    assert result["summary"]["session_end_state"]["trade_count"] == 0
     assert result["trade_log"] == []
 
     final_progress = json.loads(progress_lines[-1])
@@ -488,7 +490,7 @@ def test_live_decision_runner_summary_and_trade_log_align_when_session_creates_t
     assert result["summary"]["trade_count"] == 1
     assert result["summary"]["winning_trades"] == 1
     assert result["summary"]["realized_pnl_total"] > 0
-    assert result["summary"]["session_end_state"]["total_trade_count"] == 1
+    assert result["summary"]["session_end_state"]["trade_count"] == 1
     assert len(result["trade_log"]) == 1
     assert result["trade_log"][0]["entered_during_session"] is True
     assert result["trade_log"][0]["exited_during_session"] is True

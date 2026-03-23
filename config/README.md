@@ -14,5 +14,5 @@ OHLCV からの returns は close-to-close で計算し、生 OHLCV を simulate
 疑似リアルタイム再生は `python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json` で確認できます。
 `live_decision_runner.example.json` は Binance Spot REST `/api/v3/klines` を 1 分ごとに poll し、1 分足の確定足だけで戦略判断を継続する例です。`data_source.interval` は初期実装では `1m` 固定、`runtime.duration_seconds` は既定で 600、`runtime.warmup_candles` は起動直後に観測だけ行う confirmed candle 数です。
 live runner は起動直後には判断せず、warmup 完了後に初回判断を行います。保存先は `output.output_dir/<run_id>/` 形式の run directory で分離し、その配下に `summary.json` / `decision_log.json` / `trade_log.json` / `equity_history.json` / `progress_log.json` を保存します。`output.max_run_directories` を超える場合は最も古い run directory から削除します。
-live runner の summary では `trade_count` / `winning_trades` / `losing_trades` / `realized_pnl_total` を live session 増分として扱い、`final_value` / `final_cash` / `open_position_at_end` は session 終了時点の絶対状態として扱います。継承状態との区別は `session_start_state` / `session_end_state` で確認できます。
+warmup は観測専用で、trade / pnl / position を作りません。live runner の summary と progress は warmup 後の live session だけを対象にし、`session_start_state` は常に `initial_cash` ベースのフラット初期状態です。
 リアルタイム判定ランナーは `python3 scripts/run_live_decision_runner.py --config config/live_decision_runner.example.json` で確認できます。

@@ -162,15 +162,14 @@ decision log の理由コードは以下の2系統に分けます。
 注文送信や実売買は行わず、`OHLCV -> returns -> signals -> simulate` の責務分離を維持します。
 
 live runner は起動直後には判断せず、`warmup_candles` 分の confirmed candle を観測だけ行ってから初回判断を開始します。
-warmup 中の candle は売買判断には使いませんが、履歴コンテキストとしては保持し、warmup 完了後の初回判断はその時点で利用可能な confirmed candle 全体を文脈にして行います。
+warmup 中の candle は売買判断には使わず、履歴コンテキストとしてだけ保持します。warmup 完了後の初回判断はその時点で利用可能な confirmed candle 全体を文脈にして行いますが、保有状態・損益・trade count は warmup から持ち越しません。
 以後は `last_confirmed_timestamp` を保持し、同一 timestamp の足では再判断せず、新しく確定した 1 分足だけを順次評価します。
 
 標準出力は実行中には 1 分ごとの progress summary を短い JSON で出し、終了時には `summary` と `decision_log` の先頭 / 末尾の一部だけを表示します。
-progress summary の `trade_count` は live session 中に新規発生した trade 数だけを表し、`equity` / `cash` はその時点の絶対値です。全量ログは stdout に戻しません。
+progress summary の `trade_count` は live session 中に新規発生した trade 数だけを表し、`equity` / `cash` はフラット初期状態から始まる live session のその時点の絶対値です。全量ログは stdout に戻しません。
 
-終了時の summary でも `trade_count` / `winning_trades` / `losing_trades` / `realized_pnl_total` は live session 増分だけを表します。
-一方で `final_value` / `final_cash` / `open_position_at_end` は session 終了時点の絶対状態で、`session_start_state` / `session_end_state` を併記して継承状態と session 中の変化量を区別します。
-`trade_log` は run 全体の通算ではなく、live session 中に活動があった trade だけを保存します。
+終了時の summary でも `trade_count` / `winning_trades` / `losing_trades` / `realized_pnl_total` / `final_value` / `final_cash` / `open_position_at_end` はすべて warmup 後の live session だけを対象にします。
+`session_start_state` は常にフラットな初期状態で、`trade_log` も live session 中に発生した trade だけを保存します。
 
 保存先は `output_dir/<run_id>/` 形式の run directory で実行ごとに分離します。
 既定では run directory を最大 10 件保持し、超過時は最も古い run directory から削除します。

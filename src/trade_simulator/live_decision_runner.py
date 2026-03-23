@@ -14,11 +14,6 @@ from pathlib import Path
 from typing import Callable
 
 from trade_simulator.data.ohlcv import build_close_to_close_returns, normalize_ohlcv_rows
-from trade_simulator.signals import (
-    generate_consecutive_drop_signals,
-    generate_cumulative_drop_signals,
-    generate_threshold_signals,
-)
 from trade_simulator.simulation import simulate
 
 
@@ -229,15 +224,21 @@ def _select_confirmed_rows(rows: list[dict], now_timestamp_ms: int) -> list[dict
     return normalize_ohlcv_rows(confirmed_rows)
 
 
-def _build_strategy_result(strategy_config: dict, returns: list[float]) -> dict:
+def _build_strategy_result(
+    strategy_config: dict,
+    returns: list[float],
+    *,
+    start_signal_index: int,
+) -> dict:
     strategy_name = strategy_config.get("strategy")
     if strategy_name == "threshold":
         if "entry_threshold" not in strategy_config or "exit_threshold" not in strategy_config:
             raise ValueError("threshold strategy requires entry_threshold and exit_threshold")
-        entry_signals, exit_signals = generate_threshold_signals(
+        entry_signals, exit_signals = _build_threshold_signals(
             returns,
-            strategy_config["entry_threshold"],
-            strategy_config["exit_threshold"],
+            start_signal_index,
+            float(strategy_config["entry_threshold"]),
+            float(strategy_config["exit_threshold"]),
         )
     elif strategy_name == "cumulative_drop":
         required_keys = ("entry_window", "entry_cumulative_threshold", "exit_threshold")
@@ -245,21 +246,23 @@ def _build_strategy_result(strategy_config: dict, returns: list[float]) -> dict:
             raise ValueError(
                 "cumulative_drop strategy requires entry_window, entry_cumulative_threshold, and exit_threshold"
             )
-        entry_signals, exit_signals = generate_cumulative_drop_signals(
+        entry_signals, exit_signals = _build_cumulative_drop_signals(
             returns,
-            strategy_config["entry_window"],
-            strategy_config["entry_cumulative_threshold"],
-            strategy_config["exit_threshold"],
+            start_signal_index,
+            _validate_positive_int(strategy_config["entry_window"], "entry_window"),
+            float(strategy_config["entry_cumulative_threshold"]),
+            float(strategy_config["exit_threshold"]),
         )
     elif strategy_name == "consecutive_drop":
         required_keys = ("consecutive_periods", "drop_threshold", "exit_threshold")
         if not all(key in strategy_config for key in required_keys):
             raise ValueError("consecutive_drop strategy requires consecutive_periods, drop_threshold, and exit_threshold")
-        entry_signals, exit_signals = generate_consecutive_drop_signals(
+        entry_signals, exit_signals = _build_consecutive_drop_signals(
             returns,
-            strategy_config["consecutive_periods"],
-            strategy_config["drop_threshold"],
-            strategy_config["exit_threshold"],
+            start_signal_index,
+            _validate_positive_int(strategy_config["consecutive_periods"], "consecutive_periods"),
+            float(strategy_config["drop_threshold"]),
+            float(strategy_config["exit_threshold"]),
         )
     else:
         raise ValueError("strategy must be one of threshold, cumulative_drop, or consecutive_drop")
@@ -351,142 +354,129 @@ def _derive_cash_value(latest_result: dict | None, initial_cash: float) -> float
     return float(latest_result["final_value"])
 
 
-def _derive_session_metric_delta(
-    latest_result: dict | None,
-    session_start_result: dict | None,
-    key: str,
-) -> float:
-    if latest_result is None:
-        return 0.0
-    baseline_value = 0.0
-    if session_start_result is not None:
-        baseline_value = float(session_start_result[key])
-    return float(latest_result[key]) - baseline_value
-
-
-def _derive_session_trade_count(latest_result: dict | None, session_start_result: dict | None) -> int:
-    return int(_derive_session_metric_delta(latest_result, session_start_result, "trade_count"))
-
-
-def _derive_session_start_state(
+def _derive_session_end_state(
     *,
     initial_cash: float,
-    session_start_result: dict | None,
+    latest_result: dict | None,
 ) -> dict:
-    if session_start_result is None:
+    if latest_result is None:
         return {
             "equity": initial_cash,
             "cash": initial_cash,
             "trade_count": 0,
             "realized_pnl_total": 0.0,
+            "winning_trades": 0,
+            "losing_trades": 0,
             "open_position": False,
         }
 
     return {
-        "equity": float(session_start_result["final_value"]),
-        "cash": _derive_cash_value(session_start_result, initial_cash),
-        "trade_count": int(session_start_result["trade_count"]),
-        "realized_pnl_total": float(session_start_result["realized_pnl_total"]),
-        "open_position": bool(session_start_result["position"] and session_start_result["position"][-1]),
+        "equity": float(latest_result["final_value"]),
+        "cash": _derive_cash_value(latest_result, initial_cash),
+        "trade_count": int(latest_result["trade_count"]),
+        "realized_pnl_total": float(latest_result["realized_pnl_total"]),
+        "winning_trades": int(latest_result["winning_trades"]),
+        "losing_trades": int(latest_result["losing_trades"]),
+        "open_position": bool(latest_result["position"] and latest_result["position"][-1]),
     }
 
 
-def _derive_session_end_state(
-    *,
-    initial_cash: float,
-    latest_result: dict | None,
-    session_start_result: dict | None,
-) -> dict:
-    current_result = latest_result if latest_result is not None else session_start_result
-    if current_result is None:
-        return {
-            "equity": initial_cash,
-            "cash": initial_cash,
-            "total_trade_count": 0,
-            "total_realized_pnl_total": 0.0,
-            "open_position": False,
-        }
-
+def _build_flat_session_start_state(initial_cash: float) -> dict:
     return {
-        "equity": float(current_result["final_value"]),
-        "cash": _derive_cash_value(current_result, initial_cash),
-        "total_trade_count": int(current_result["trade_count"]),
-        "total_realized_pnl_total": float(current_result["realized_pnl_total"]),
-        "open_position": bool(current_result["position"] and current_result["position"][-1]),
+        "equity": initial_cash,
+        "cash": initial_cash,
+        "trade_count": 0,
+        "realized_pnl_total": 0.0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "open_position": False,
     }
 
 
-def _derive_session_result_summary(
-    *,
-    initial_cash: float,
-    latest_result: dict | None,
-    session_start_result: dict | None,
-) -> dict:
-    session_start_state = _derive_session_start_state(
-        initial_cash=initial_cash,
-        session_start_result=session_start_result,
-    )
-    session_end_state = _derive_session_end_state(
-        initial_cash=initial_cash,
-        latest_result=latest_result,
-        session_start_result=session_start_result,
-    )
+def _build_threshold_signals(
+    returns: list[float],
+    start_signal_index: int,
+    entry_threshold: float,
+    exit_threshold: float,
+) -> tuple[list[bool], list[bool]]:
+    entry_signals = [False] * len(returns)
+    exit_signals = [False] * len(returns)
+    is_in_position = False
 
-    return {
-        "trade_count": _derive_session_trade_count(latest_result, session_start_result),
-        "winning_trades": int(_derive_session_metric_delta(latest_result, session_start_result, "winning_trades")),
-        "losing_trades": int(_derive_session_metric_delta(latest_result, session_start_result, "losing_trades")),
-        "realized_pnl_total": _derive_session_metric_delta(latest_result, session_start_result, "realized_pnl_total"),
-        "value_change": session_end_state["equity"] - session_start_state["equity"],
-        "started_with_open_position": session_start_state["open_position"],
-        "open_position_at_end": session_end_state["open_position"],
-    }
+    for period_index in range(start_signal_index, len(returns)):
+        period_return = returns[period_index]
+        if not is_in_position and period_return >= entry_threshold:
+            entry_signals[period_index] = True
+            is_in_position = True
+        elif is_in_position and period_return <= exit_threshold:
+            exit_signals[period_index] = True
+            is_in_position = False
+
+    return entry_signals, exit_signals
 
 
-def _build_session_trade_log(
-    *,
-    latest_result: dict | None,
-    return_timestamps: list[str],
-    session_start_return_count: int,
-) -> list[dict]:
-    if latest_result is None:
-        return []
+def _build_cumulative_drop_signals(
+    returns: list[float],
+    start_signal_index: int,
+    entry_window: int,
+    entry_cumulative_threshold: float,
+    exit_threshold: float,
+) -> tuple[list[bool], list[bool]]:
+    entry_signals = [False] * len(returns)
+    exit_signals = [False] * len(returns)
+    is_in_position = False
 
-    session_trade_log = []
-    for trade_index, trade in enumerate(latest_result["trade_log"]):
-        entry_index = trade["entry_index"]
-        exit_index = trade["exit_index"]
-        entered_during_session = entry_index >= session_start_return_count
-        exited_during_session = exit_index is not None and exit_index >= session_start_return_count
-        active_at_session_start = entry_index < session_start_return_count and (
-            exit_index is None or exit_index >= session_start_return_count
-        )
-
-        if not (entered_during_session or exited_during_session or active_at_session_start):
+    for period_index in range(start_signal_index, len(returns)):
+        period_return = returns[period_index]
+        if is_in_position:
+            should_exit = period_return >= exit_threshold
+            exit_signals[period_index] = should_exit
+            if should_exit:
+                is_in_position = False
             continue
 
-        session_trade_entry = dict(trade)
-        session_trade_entry["session_trade_index"] = len(session_trade_log)
-        session_trade_entry["entry_return_timestamp"] = return_timestamps[entry_index]
-        session_trade_entry["exit_return_timestamp"] = None
-        if exit_index is not None:
-            session_trade_entry["exit_return_timestamp"] = return_timestamps[exit_index]
-        session_trade_entry["entered_before_session"] = entry_index < session_start_return_count
-        session_trade_entry["entered_during_session"] = entered_during_session
-        session_trade_entry["exited_during_session"] = exited_during_session
-        session_trade_entry["active_at_session_start"] = active_at_session_start
-        session_trade_entry["active_at_session_end"] = exit_index is None
-        session_trade_log.append(session_trade_entry)
+        if period_index + 1 < entry_window:
+            continue
 
-    return session_trade_log
+        cumulative_return = sum(returns[period_index - entry_window + 1 : period_index + 1])
+        should_enter = cumulative_return <= entry_cumulative_threshold
+        entry_signals[period_index] = should_enter
+        if should_enter:
+            is_in_position = True
+
+    return entry_signals, exit_signals
 
 
-def _build_strategy_context_result(strategy_config: dict, confirmed_rows: list[dict]) -> tuple[dict | None, int]:
-    if len(confirmed_rows) < 2:
-        return None, 0
+def _build_consecutive_drop_signals(
+    returns: list[float],
+    start_signal_index: int,
+    consecutive_periods: int,
+    drop_threshold: float,
+    exit_threshold: float,
+) -> tuple[list[bool], list[bool]]:
+    entry_signals = [False] * len(returns)
+    exit_signals = [False] * len(returns)
+    is_in_position = False
 
-    returns_payload = build_close_to_close_returns(confirmed_rows)
-    return _build_strategy_result(strategy_config, returns_payload["returns"]), len(returns_payload["returns"])
+    for period_index in range(start_signal_index, len(returns)):
+        period_return = returns[period_index]
+        if is_in_position:
+            should_exit = period_return >= exit_threshold
+            exit_signals[period_index] = should_exit
+            if should_exit:
+                is_in_position = False
+            continue
+
+        if period_index + 1 < consecutive_periods:
+            continue
+
+        recent_returns = returns[period_index - consecutive_periods + 1 : period_index + 1]
+        should_enter = all(period <= drop_threshold for period in recent_returns)
+        entry_signals[period_index] = should_enter
+        if should_enter:
+            is_in_position = True
+
+    return entry_signals, exit_signals
 
 
 def build_live_progress_stdout_payload(
@@ -494,7 +484,6 @@ def build_live_progress_stdout_payload(
     poll_index: int,
     fetched_at: str,
     latest_result: dict | None,
-    session_start_result: dict | None,
     initial_cash: float,
     reason_code: str,
     last_confirmed_timestamp: str | None,
@@ -502,7 +491,6 @@ def build_live_progress_stdout_payload(
     session_end_state = _derive_session_end_state(
         initial_cash=initial_cash,
         latest_result=latest_result,
-        session_start_result=session_start_result,
     )
 
     return {
@@ -510,7 +498,7 @@ def build_live_progress_stdout_payload(
         "poll_index": poll_index,
         "fetched_at": fetched_at,
         "reason_code": reason_code,
-        "trade_count": _derive_session_trade_count(latest_result, session_start_result),
+        "trade_count": session_end_state["trade_count"],
         "equity": session_end_state["equity"],
         "cash": session_end_state["cash"],
         "last_confirmed_timestamp": last_confirmed_timestamp,
@@ -525,6 +513,7 @@ def _append_decision_entries(
     *,
     strategy_config: dict,
     confirmed_rows: list[dict],
+    session_start_index: int,
     latest_row: dict,
     decision_log: list[dict],
     equity_history: list[dict],
@@ -533,7 +522,11 @@ def _append_decision_entries(
     latest_weight_1m: str | None,
 ) -> dict:
     returns_payload = build_close_to_close_returns(confirmed_rows)
-    latest_result = _build_strategy_result(strategy_config, returns_payload["returns"])
+    latest_result = _build_strategy_result(
+        strategy_config,
+        returns_payload["returns"],
+        start_signal_index=session_start_index,
+    )
     entry_signal = latest_result["entry_signals"][-1]
     exit_signal = latest_result["exit_signals"][-1]
     current_in_position = latest_result["position"][-1]
@@ -565,6 +558,7 @@ def _append_decision_entries(
             ),
             "position_after_tick": current_in_position,
             "equity_after_tick": latest_result["final_value"],
+            "cash_after_tick": _derive_cash_value(latest_result, float(strategy_config["initial_cash"])),
             "used_weight_1m": latest_weight_1m,
         }
     )
@@ -577,6 +571,7 @@ def _append_decision_entries(
             "ohlcv_timestamp": latest_row["timestamp"],
             "return_timestamp": returns_payload["return_timestamps"][-1],
             "equity": latest_result["final_value"],
+            "cash": _derive_cash_value(latest_result, float(strategy_config["initial_cash"])),
             "in_position": current_in_position,
         }
     )
@@ -651,8 +646,6 @@ def _build_runtime_payload(
     equity_history: list[dict],
     progress_log: list[dict],
     latest_result: dict | None,
-    session_start_result: dict | None,
-    session_start_return_count: int,
     status: str,
     stop_reason: str,
     started_at: str,
@@ -667,29 +660,28 @@ def _build_runtime_payload(
     data_source = config["data_source"]
     output = config["output"]
     initial_cash = float(strategy_config["initial_cash"])
-    session_start_state = _derive_session_start_state(
-        initial_cash=initial_cash,
-        session_start_result=session_start_result,
-    )
+    session_start_state = _build_flat_session_start_state(initial_cash)
     session_end_state = _derive_session_end_state(
         initial_cash=initial_cash,
         latest_result=latest_result,
-        session_start_result=session_start_result,
-    )
-    session_result = _derive_session_result_summary(
-        initial_cash=initial_cash,
-        latest_result=latest_result,
-        session_start_result=session_start_result,
     )
 
     return_timestamps: list[str] = []
     if len(confirmed_rows) >= 2:
         return_timestamps = build_close_to_close_returns(confirmed_rows)["return_timestamps"]
-    trade_log = _build_session_trade_log(
-        latest_result=latest_result,
-        return_timestamps=return_timestamps,
-        session_start_return_count=session_start_return_count,
-    )
+    trade_log: list[dict] = []
+    if latest_result is not None:
+        for trade in latest_result["trade_log"]:
+            session_trade_entry = dict(trade)
+            session_trade_entry["session_trade_index"] = len(trade_log)
+            session_trade_entry["entry_return_timestamp"] = return_timestamps[trade["entry_index"]]
+            session_trade_entry["exit_return_timestamp"] = None
+            if trade["exit_index"] is not None:
+                session_trade_entry["exit_return_timestamp"] = return_timestamps[trade["exit_index"]]
+            session_trade_entry["entered_during_session"] = True
+            session_trade_entry["exited_during_session"] = trade["exit_index"] is not None
+            session_trade_entry["active_at_session_end"] = trade["exit_index"] is None
+            trade_log.append(session_trade_entry)
 
     summary = {
         "simulation_name": strategy_config.get("simulation_name", strategy_config.get("name", "live_decision_runner")),
@@ -728,19 +720,19 @@ def _build_runtime_payload(
             "final_value": "session_end_absolute_equity",
             "final_cash": "session_end_absolute_cash",
             "open_position_at_end": "session_end_absolute_position_state",
-            "trade_log": "trades_with_session_activity_only",
+            "trade_log": "live_session_trades_only",
         },
         "session_start_state": session_start_state,
         "session_end_state": session_end_state,
-        "trade_count": session_result["trade_count"],
-        "winning_trades": session_result["winning_trades"],
-        "losing_trades": session_result["losing_trades"],
-        "realized_pnl_total": session_result["realized_pnl_total"],
-        "session_value_change": session_result["value_change"],
-        "session_started_with_open_position": session_result["started_with_open_position"],
+        "trade_count": session_end_state["trade_count"],
+        "winning_trades": session_end_state["winning_trades"],
+        "losing_trades": session_end_state["losing_trades"],
+        "realized_pnl_total": session_end_state["realized_pnl_total"],
+        "session_value_change": session_end_state["equity"] - session_start_state["equity"],
+        "session_started_with_open_position": False,
         "final_value": session_end_state["equity"],
         "final_cash": session_end_state["cash"],
-        "open_position_at_end": session_result["open_position_at_end"],
+        "open_position_at_end": session_end_state["open_position"],
     }
 
     if run_context is not None:
@@ -810,8 +802,6 @@ def run_live_decision_runner(
     equity_history: list[dict] = []
     progress_log: list[dict] = []
     latest_result: dict | None = None
-    session_start_result: dict | None = None
-    session_start_return_count = 0
     status = "completed"
     stop_reason = "duration_elapsed"
     error_message: str | None = None
@@ -909,6 +899,7 @@ def run_live_decision_runner(
                         latest_result = _append_decision_entries(
                             strategy_config=validated_config["strategy"],
                             confirmed_rows=confirmed_rows,
+                            session_start_index=max(runtime["warmup_candles"] - 1, 0),
                             latest_row=confirmed_rows[-1],
                             decision_log=decision_log,
                             equity_history=equity_history,
@@ -979,6 +970,7 @@ def run_live_decision_runner(
                         latest_result = _append_decision_entries(
                             strategy_config=validated_config["strategy"],
                             confirmed_rows=confirmed_rows,
+                            session_start_index=max(runtime["warmup_candles"] - 1, 0),
                             latest_row=row,
                             decision_log=decision_log,
                             equity_history=equity_history,
@@ -987,23 +979,12 @@ def run_live_decision_runner(
                             latest_weight_1m=latest_weight_1m,
                         )
 
-            if (
-                session_start_result is None
-                and counters["observed_confirmed_candles"] >= runtime["warmup_candles"]
-                and len(confirmed_rows) >= 2
-            ):
-                session_start_result, session_start_return_count = _build_strategy_context_result(
-                    validated_config["strategy"],
-                    confirmed_rows,
-                )
-
             print_fn(
                 format_live_progress_stdout(
                     build_live_progress_stdout_payload(
                         poll_index=poll_index,
                         fetched_at=fetched_at,
                         latest_result=latest_result,
-                        session_start_result=session_start_result,
                         initial_cash=float(validated_config["strategy"]["initial_cash"]),
                         reason_code=progress_reason_code,
                         last_confirmed_timestamp=last_confirmed_timestamp,
@@ -1035,8 +1016,6 @@ def run_live_decision_runner(
         equity_history=equity_history,
         progress_log=progress_log,
         latest_result=latest_result,
-        session_start_result=session_start_result,
-        session_start_return_count=session_start_return_count,
         status=status,
         stop_reason=stop_reason,
         started_at=started_at,
