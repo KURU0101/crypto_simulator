@@ -20,7 +20,24 @@ def test_load_config() -> None:
     assert config["exit_signals"] == [False, True, False, False]
 
 
-def test_simulate_result_structure() -> None:
+def test_simulate_matches_manually_verified_example() -> None:
+    config = {
+        "simulation_name": "example_simulation",
+        "initial_cash": 1000000.0,
+        "returns": [0.01, -0.02, 0.03, 0.01],
+        "entry_signals": [True, False, True, False],
+        "exit_signals": [False, True, False, False],
+    }
+
+    result = simulate(config)
+
+    assert result["position"] == [True, False, True, True]
+    assert result["equity_curve"] == [1000000.0, 1010000.0, 1010000.0, 1040300.0, 1050703.0]
+    assert result["final_value"] == 1050703.0
+    assert result["final_value"] == result["equity_curve"][-1]
+
+
+def test_simulate_returns_expected_result_fields() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
@@ -50,7 +67,7 @@ def test_simulate_result_structure() -> None:
     assert result["final_value"] == 1100.0
 
 
-def test_simulate_raises_on_length_mismatch() -> None:
+def test_simulate_raises_when_returns_and_entry_signals_lengths_differ() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
@@ -61,6 +78,81 @@ def test_simulate_raises_on_length_mismatch() -> None:
 
     with pytest.raises(ValueError, match="returns, entry_signals, and exit_signals must have the same length"):
         simulate(config)
+
+
+def test_simulate_raises_when_returns_and_exit_signals_lengths_differ() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "returns": [0.1, -0.05],
+        "entry_signals": [True, False],
+        "exit_signals": [False],
+    }
+
+    with pytest.raises(ValueError, match="returns, entry_signals, and exit_signals must have the same length"):
+        simulate(config)
+
+
+def test_simulate_raises_when_entry_and_exit_signals_lengths_differ() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "returns": [0.1, -0.05],
+        "entry_signals": [True],
+        "exit_signals": [False, False, True],
+    }
+
+    with pytest.raises(ValueError, match="returns, entry_signals, and exit_signals must have the same length"):
+        simulate(config)
+
+
+def test_simulate_returns_initial_cash_only_for_empty_returns() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "returns": [],
+        "entry_signals": [],
+        "exit_signals": [],
+    }
+
+    result = simulate(config)
+
+    assert result["position"] == []
+    assert result["equity_curve"] == [1000.0]
+    assert result["final_value"] == 1000.0
+    assert result["final_value"] == result["equity_curve"][-1]
+
+
+def test_simulate_keeps_equity_flat_when_never_in_position() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "returns": [0.1, -0.05, 0.02],
+        "entry_signals": [False, False, False],
+        "exit_signals": [False, False, False],
+    }
+
+    result = simulate(config)
+
+    assert result["position"] == [False, False, False]
+    assert result["equity_curve"] == [1000.0, 1000.0, 1000.0, 1000.0]
+    assert result["final_value"] == 1000.0
+
+
+def test_simulate_applies_all_returns_when_always_in_position() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "returns": [0.1, -0.05, 0.02],
+        "entry_signals": [True, False, False],
+        "exit_signals": [False, False, False],
+    }
+
+    result = simulate(config)
+
+    assert result["position"] == [True, True, True]
+    assert result["equity_curve"] == [1000.0, 1100.0, 1045.0, 1065.9]
+    assert result["final_value"] == 1065.9
 
 
 def test_simulate_exit_wins_when_entry_and_exit_are_both_true() -> None:
