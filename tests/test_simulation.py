@@ -2,6 +2,7 @@ from pathlib import Path
 import pytest
 
 from trade_simulator.config import load_config
+from trade_simulator.comparison import run_comparisons, summarize_case_result
 from trade_simulator.simulation import simulate
 
 
@@ -20,6 +21,15 @@ def test_load_config() -> None:
     assert config["returns"] == [0.01, -0.02, 0.03, 0.01]
     assert config["entry_signals"] == [True, False, True, False]
     assert config["exit_signals"] == [False, True, False, False]
+
+
+def test_load_comparison_config() -> None:
+    config_path = Path("config/comparison.example.json")
+    cases = load_config(config_path)
+
+    assert len(cases) == 2
+    assert cases[0]["name"] == "zero_cost"
+    assert cases[1]["name"] == "with_cost"
 
 
 def test_simulate_matches_manually_verified_example_with_zero_costs() -> None:
@@ -583,3 +593,178 @@ def test_simulate_same_period_entry_and_exit_results_in_no_position() -> None:
     assert result["average_holding_period"] == 0.0
     assert result["equity_curve"] == [1000.0, 1000.0]
     assert result["final_value"] == 1000.0
+
+
+def test_summarize_case_result_matches_simulation_summary_fields() -> None:
+    result = simulate(
+        {
+            "simulation_name": "test",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.1, -0.05, 0.02],
+            "entry_signals": [True, False, False],
+            "exit_signals": [False, True, False],
+        }
+    )
+
+    summary = summarize_case_result("baseline", result)
+
+    assert summary == {
+        "name": "baseline",
+        "final_value": 1100.0,
+        "trade_count": 1,
+        "periods_in_position": 1,
+        "winning_trades": 1,
+        "losing_trades": 0,
+        "realized_pnl_total": 100.0,
+        "average_holding_period": 1.0,
+    }
+
+
+def test_run_comparisons_returns_one_summary_per_case() -> None:
+    cases = [
+        {
+            "name": "zero_cost",
+            "simulation_name": "zero_cost",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.1],
+            "entry_signals": [True],
+            "exit_signals": [False],
+        },
+        {
+            "name": "with_cost",
+            "simulation_name": "with_cost",
+            "initial_cash": 1000,
+            "fee_rate": 0.01,
+            "slippage_rate": 0.0,
+            "returns": [0.1],
+            "entry_signals": [True],
+            "exit_signals": [False],
+        },
+    ]
+
+    comparisons = run_comparisons(cases)
+
+    assert len(comparisons) == 2
+    assert comparisons == [
+        {
+            "name": "zero_cost",
+            "final_value": 1100.0,
+            "trade_count": 1,
+            "periods_in_position": 1,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "realized_pnl_total": 0,
+            "average_holding_period": 0.0,
+        },
+        {
+            "name": "with_cost",
+            "final_value": 1089.0,
+            "trade_count": 1,
+            "periods_in_position": 1,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "realized_pnl_total": 0,
+            "average_holding_period": 0.0,
+        },
+    ]
+
+
+def test_run_comparisons_matches_single_simulation_summary() -> None:
+    case = {
+        "name": "baseline",
+        "simulation_name": "baseline",
+        "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
+        "returns": [0.1, -0.05, 0.02],
+        "entry_signals": [True, False, False],
+        "exit_signals": [False, True, False],
+    }
+
+    comparison = run_comparisons([case])[0]
+    single_result = simulate({key: value for key, value in case.items() if key != "name"})
+
+    assert comparison == summarize_case_result("baseline", single_result)
+
+
+def test_run_comparisons_raises_when_name_is_missing() -> None:
+    cases = [
+        {
+            "simulation_name": "missing_name",
+            "initial_cash": 1000,
+            "returns": [0.1],
+            "entry_signals": [True],
+            "exit_signals": [False],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="each comparison case must include a name"):
+        run_comparisons(cases)
+
+
+def test_run_comparisons_allows_duplicate_names() -> None:
+    cases = [
+        {
+            "name": "duplicate",
+            "simulation_name": "first",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.1],
+            "entry_signals": [True],
+            "exit_signals": [False],
+        },
+        {
+            "name": "duplicate",
+            "simulation_name": "second",
+            "initial_cash": 1000,
+            "fee_rate": 0.01,
+            "slippage_rate": 0.0,
+            "returns": [0.1],
+            "entry_signals": [True],
+            "exit_signals": [False],
+        },
+    ]
+
+    comparisons = run_comparisons(cases)
+
+    assert [comparison["name"] for comparison in comparisons] == ["duplicate", "duplicate"]
+    assert comparisons[0]["final_value"] != comparisons[1]["final_value"]
+
+
+def test_run_comparisons_returns_empty_list_for_empty_cases() -> None:
+    assert run_comparisons([]) == []
+
+
+def test_run_comparisons_handles_single_zero_summary_case() -> None:
+    comparisons = run_comparisons(
+        [
+            {
+                "name": "flat",
+                "simulation_name": "flat",
+                "initial_cash": 1000,
+                "fee_rate": 0.0,
+                "slippage_rate": 0.0,
+                "returns": [],
+                "entry_signals": [],
+                "exit_signals": [],
+            }
+        ]
+    )
+
+    assert comparisons == [
+        {
+            "name": "flat",
+            "final_value": 1000.0,
+            "trade_count": 0,
+            "periods_in_position": 0,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "realized_pnl_total": 0,
+            "average_holding_period": 0.0,
+        }
+    ]

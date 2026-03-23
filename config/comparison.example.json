@@ -1,0 +1,22 @@
+[
+  {
+    "name": "zero_cost",
+    "simulation_name": "example_zero_cost",
+    "initial_cash": 1000000,
+    "fee_rate": 0.0,
+    "slippage_rate": 0.0,
+    "returns": [0.01, -0.02, 0.03, 0.01],
+    "entry_signals": [true, false, true, false],
+    "exit_signals": [false, true, false, false]
+  },
+  {
+    "name": "with_cost",
+    "simulation_name": "example_with_cost",
+    "initial_cash": 1000000,
+    "fee_rate": 0.001,
+    "slippage_rate": 0.001,
+    "returns": [0.01, -0.02, 0.03, 0.01],
+    "entry_signals": [true, false, true, false],
+    "exit_signals": [false, true, false, false]
+  }
+]
