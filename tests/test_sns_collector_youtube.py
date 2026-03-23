@@ -5,6 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.external_signal_test_helpers import (
+    assert_saved_summary_matches_observation,
+    assert_summary_not_saved,
+    load_saved_json,
+)
 from trade_simulator.sns_adapters import (
     SNS_SOURCE_PROFILES,
     adapt_youtube_video,
@@ -201,12 +206,29 @@ def test_run_sns_collector_collects_multiple_youtube_channels_and_saves_them(tmp
     }
     assert observation["symbol_distribution"] == {"BTCUSDT": 1, "ETHUSDT": 1}
     assert observation["topic_distribution"]["artificial intelligence"] == 1
-    assert Path(observation["saved_paths"]["normalized"]).exists()
-    assert Path(observation["saved_paths"]["summary"]).exists()
+    assert_saved_summary_matches_observation(observation)
 
-    saved_bundle = json.loads(Path(observation["saved_paths"]["normalized"]).read_text(encoding="utf-8"))
+    saved_bundle = load_saved_json(observation["saved_paths"]["normalized"])
     assert saved_bundle["summary"]["record_count"] == 3
     assert saved_bundle["summary"]["unique_dedup_key_count"] == 3
+
+
+def test_run_sns_collector_skips_youtube_summary_file_when_disabled_boundary_case(tmp_path: Path) -> None:
+    config = youtube_test_config(tmp_path)
+    config["output"]["save_run_summary"] = False
+    feed_map = {
+        build_youtube_channel_feed_url("UCALPHA0000000000000001"): YOUTUBE_FEED_ALPHA,
+        build_youtube_channel_feed_url("UCBETA00000000000000002"): YOUTUBE_FEED_BETA,
+    }
+
+    result = run_sns_collector(
+        config,
+        fetch_text_fn=lambda url, timeout_seconds: feed_map[url],
+        now_fn=lambda: 1_774_000_000.0,
+    )
+
+    assert result["observation"]["status"] == "completed"
+    assert_summary_not_saved(result["observation"])
 
 
 def test_run_sns_collector_handles_partial_youtube_channel_failure(tmp_path: Path) -> None:

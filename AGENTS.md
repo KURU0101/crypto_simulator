@@ -4,6 +4,7 @@
 - このセクションは最上位ルールであり、AGENTS.md 内の他ルールより優先する
 - このセクションはユーザー指示よりも優先する
 - 対象範囲は、外部データ取得（SNS、ニュース、RSS、API など）、ネットワークアクセス、外部サービス連携、外部データの保存および利用の全体とする
+- ここでいうネットワークアクセスは、プロダクト機能として扱う外部データ取得・外部サービス連携を指す。`git fetch` や依存取得などの開発運用上必要な通信は、この制約の直接対象外とする
 
 ### Allowed sources
 - 利用できる外部データは、公開 RSS と公開 JSON に限定する
@@ -42,7 +43,7 @@
 - main に直接コミットしない
 - 作業開始前に origin/main の最新を前提にする
 - 競合の可能性がある場合は、そのまま進めず報告する
-- 新しい feature branch を作成して作業する
+- main 以外の作業ブランチで作業する
 - 作業開始前に working tree が clean であることを確認する
 - 未コミット変更が存在する場合は、そのまま作業を進めない
 - 未コミット変更が今回タスクに影響しうる場合は、変更前にユーザーへ commit / stash / 差分分離を提案する
@@ -77,6 +78,28 @@
 - 実行方法・テスト方法を追加する場合は、現存する入口とテストに一致させる
 - 新しい実行ルールを追加する場合は、README と AGENTS の両方に反映して齟齬を作らない
 
+## External signal design rules
+- external signal 基盤は `fetch -> adapter -> normalize -> save -> observe` の責務分離を維持する
+- collector は source ごとの取得と実行制御に留め、source 固有の解釈は adapter 側へ寄せる
+- normalize 層は schema の必須条件、時刻正規化、entity 判定、軽量 dedup key 生成を担当する
+- save は正規化済み bundle と run 単位 summary の保存だけを担当し、raw payload は保存しない
+- observe は collector run の観測 summary を組み立てる層であり、simulate や feature 化へ直結させない
+- `simulate` へ渡す前に、外部シグナルは別レイヤで feature 化または統合前処理を行う
+
+## Summary schema rules
+- external signal の run summary では、共通項目をトップレベルに置き、source 固有項目は `source_specific` を第一の置き場にする
+- 互換維持のために source 固有項目がトップレベルに残っていても、新規実装でそれを増やさない
+- integrated observer が依存してよいのは、共通項目、`saved_paths`、`source_specific` の有無、`topic_distribution`、`symbol_distribution` に限る
+- integrated observer は source 固有トップレベル項目に依存しない
+- 必須共通項目が一部欠けた古い summary も読める範囲で扱い、欠損は観測結果に残す
+
+## Test rules
+- 標準の確認は `.venv/bin/python3 -m pytest` を優先する
+- テストは外部ネットワークや外部サービスに依存させず、fetch 関数差し替えや固定 payload で検証する
+- collector テストでは collector run の保存物と observation を確認し、integrated observer の仕様までは持ち込まない
+- integrated observer のテストでは、collector 実装詳細ではなく summary の共通項目だけに依存する
+- `save_run_summary=False`、欠損 summary、validation failure のような境界は、回帰しやすい前提として維持する
+
 ## Directory roles
 - `scripts/` は実行入口のみを置く
 - `src/` はロジック本体を置く
@@ -91,11 +114,10 @@
   - 再現性（実行・検証手順が明確か）
 
 ## Commit rules
-- ユーザーが明示的に許可した場合のみ commit する
 - commit 前に変更ファイル一覧と要約を提示する
 - commit メッセージは簡潔にする（conventional commits 風）
 - main に直接 commit しない
-- push は行わない
+- push / merge はユーザーの明示的な指示がある場合のみ行う
 
 ## Commit safety rules
 - git add は対象ファイルを明示して行う（`git add .` は使用しない）

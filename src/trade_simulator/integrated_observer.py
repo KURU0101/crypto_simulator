@@ -10,6 +10,15 @@ SUMMARY_ROOTS = {
     "sns": "sns_signals",
 }
 
+REQUIRED_SUMMARY_FIELDS = (
+    "signal_type",
+    "source",
+    "run_id",
+    "started_at",
+    "ended_at",
+    "status",
+)
+
 COUNT_FIELDS = (
     "fetched_item_count",
     "normalized_success_count",
@@ -18,8 +27,29 @@ COUNT_FIELDS = (
     "duplicate_count",
 )
 
+COMMON_DISTRIBUTION_FIELDS = (
+    "topic_distribution",
+    "symbol_distribution",
+)
+
+# Legacy summaries may still expose source-specific fields at the top level for
+# compatibility. The integrated observer intentionally does not depend on them.
+LEGACY_SOURCE_SPECIFIC_TOP_LEVEL_FIELDS = (
+    "feed_url",
+    "listing_url",
+    "configured_group_count",
+    "configured_channel_count",
+    "successful_channel_count",
+    "failed_channel_count",
+    "empty_channel_count",
+    "story_list",
+    "list_url",
+    "item_url_template",
+)
+
 
 def scan_saved_signal_summaries(root_dir: str | Path = "var") -> list[dict]:
+    """Read saved external-signal run summaries using only the common schema."""
     root_path = Path(root_dir)
     entries: list[dict] = []
 
@@ -99,26 +129,14 @@ def _read_summary_entry(*, run_dir: Path, signal_type: str, source: str) -> dict
         return entry
 
     entry = dict(base_entry)
-    entry["run_id"] = _read_string(payload.get("run_id")) or run_dir.name
-    entry["signal_type"] = _read_string(payload.get("signal_type")) or signal_type
-    entry["source"] = _read_string(payload.get("source")) or source
-    entry["status"] = _read_string(payload.get("status")) or "invalid_summary"
-    entry["started_at"] = _read_string(payload.get("started_at"))
-    entry["ended_at"] = _read_string(payload.get("ended_at"))
-    for field_name in COUNT_FIELDS:
-        entry[field_name] = _read_non_negative_int(payload.get(field_name))
-    entry["warnings"] = _normalize_messages(payload.get("warnings"))
-    entry["errors"] = _normalize_errors(payload.get("errors"))
-    entry["saved_paths"] = _normalize_saved_paths(payload.get("saved_paths"), summary_path=summary_path)
-    entry["source_specific"] = _normalize_mapping(payload.get("source_specific"))
-    entry["missing_required_fields"] = _missing_required_fields(entry)
-    entry["has_source_specific"] = bool(entry["source_specific"])
-    entry["warning_count"] = len(entry["warnings"])
-    entry["error_count"] = len(entry["errors"])
-    entry["topic_distribution"] = _normalize_distribution(payload.get("topic_distribution"))
-    entry["symbol_distribution"] = _normalize_distribution(payload.get("symbol_distribution"))
-    entry["topic_distribution_overview"] = _distribution_overview(entry["topic_distribution"])
-    entry["symbol_distribution_overview"] = _distribution_overview(entry["symbol_distribution"])
+    _apply_common_summary_fields(
+        entry,
+        payload=payload,
+        summary_path=summary_path,
+        default_signal_type=signal_type,
+        default_source=source,
+        default_run_id=run_dir.name,
+    )
     return entry
 
 
@@ -149,6 +167,38 @@ def _base_entry(*, signal_type: str, source: str, run_dir: Path) -> dict:
         "missing_required_fields": [],
         "run_directory": str(run_dir),
     }
+
+
+def _apply_common_summary_fields(
+    entry: dict,
+    *,
+    payload: dict,
+    summary_path: Path,
+    default_signal_type: str,
+    default_source: str,
+    default_run_id: str,
+) -> None:
+    """Populate one observer entry from summary fields that are shared across sources."""
+    entry["run_id"] = _read_string(payload.get("run_id")) or default_run_id
+    entry["signal_type"] = _read_string(payload.get("signal_type")) or default_signal_type
+    entry["source"] = _read_string(payload.get("source")) or default_source
+    entry["status"] = _read_string(payload.get("status")) or "invalid_summary"
+    entry["started_at"] = _read_string(payload.get("started_at"))
+    entry["ended_at"] = _read_string(payload.get("ended_at"))
+    for field_name in COUNT_FIELDS:
+        entry[field_name] = _read_non_negative_int(payload.get(field_name))
+    entry["warnings"] = _normalize_messages(payload.get("warnings"))
+    entry["errors"] = _normalize_errors(payload.get("errors"))
+    entry["saved_paths"] = _normalize_saved_paths(payload.get("saved_paths"), summary_path=summary_path)
+    entry["source_specific"] = _normalize_source_specific(payload)
+    entry["missing_required_fields"] = _missing_required_fields(entry)
+    entry["has_source_specific"] = bool(entry["source_specific"])
+    entry["warning_count"] = len(entry["warnings"])
+    entry["error_count"] = len(entry["errors"])
+    for field_name in COMMON_DISTRIBUTION_FIELDS:
+        entry[field_name] = _normalize_distribution(payload.get(field_name))
+    entry["topic_distribution_overview"] = _distribution_overview(entry["topic_distribution"])
+    entry["symbol_distribution_overview"] = _distribution_overview(entry["symbol_distribution"])
 
 
 def _filter_entries(
@@ -286,6 +336,17 @@ def _normalize_mapping(value: object) -> dict:
     return dict(value)
 
 
+def _normalize_source_specific(payload: dict) -> dict:
+    normalized = _normalize_mapping(payload.get("source_specific"))
+    if normalized:
+        return normalized
+
+    # Compatibility note: old summaries may still duplicate source-specific
+    # fields at the top level. The integrated observer intentionally ignores
+    # them so that new source additions do not create hidden dependencies.
+    return {}
+
+
 def _normalize_saved_paths(value: object, *, summary_path: Path) -> dict[str, str]:
     normalized: dict[str, str] = {"summary": str(summary_path)}
     if not isinstance(value, dict):
@@ -330,8 +391,7 @@ def _normalize_errors(value: object) -> list[dict]:
 
 
 def _missing_required_fields(entry: dict) -> list[str]:
-    required_fields = ("signal_type", "source", "run_id", "started_at", "ended_at", "status")
-    return [field_name for field_name in required_fields if not entry.get(field_name)]
+    return [field_name for field_name in REQUIRED_SUMMARY_FIELDS if not entry.get(field_name)]
 
 
 def _read_string(value: object) -> str | None:
@@ -362,6 +422,10 @@ def _sort_entries(entries: Iterable[dict]) -> list[dict]:
 
 
 __all__ = [
+    "COMMON_DISTRIBUTION_FIELDS",
+    "COUNT_FIELDS",
+    "LEGACY_SOURCE_SPECIFIC_TOP_LEVEL_FIELDS",
+    "REQUIRED_SUMMARY_FIELDS",
     "SUMMARY_ROOTS",
     "build_integrated_summary_report",
     "scan_saved_signal_summaries",

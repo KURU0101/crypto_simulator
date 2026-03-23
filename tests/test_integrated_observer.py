@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from trade_simulator.integrated_observer import build_integrated_summary_report, scan_saved_signal_summaries
+from trade_simulator.integrated_observer import (
+    COMMON_DISTRIBUTION_FIELDS,
+    COUNT_FIELDS,
+    LEGACY_SOURCE_SPECIFIC_TOP_LEVEL_FIELDS,
+    REQUIRED_SUMMARY_FIELDS,
+    build_integrated_summary_report,
+    scan_saved_signal_summaries,
+)
 from trade_simulator.integrated_observer_cli import format_integrated_summary_report, main as integrated_observer_main
 
 
@@ -17,6 +24,7 @@ def test_scan_saved_signal_summaries_reads_news_and_sns_runs(tmp_path: Path) -> 
         fetched_item_count=2,
         normalized_success_count=2,
         saved_record_count=2,
+        source_specific={"feed_url": "https://example.invalid/feed.xml"},
         symbol_distribution={"BTCUSDT": 1},
         topic_distribution={"bitcoin": 1, "policy": 1},
     )
@@ -52,6 +60,7 @@ def test_scan_saved_signal_summaries_reads_news_and_sns_runs(tmp_path: Path) -> 
     assert news_entry["topic_distribution_overview"] == "bitcoin:1, policy:1"
     assert news_entry["warning_count"] == 0
     assert news_entry["error_count"] == 0
+    assert news_entry["has_source_specific"] is True
 
     assert sns_entry["status"] == "failed"
     assert sns_entry["warning_count"] == 1
@@ -99,6 +108,43 @@ def test_scan_saved_signal_summaries_marks_missing_broken_and_incomplete_runs(tm
     assert incomplete_entry["has_source_specific"] is False
     assert incomplete_entry["topic_distribution"] == {}
     assert incomplete_entry["symbol_distribution"] == {}
+
+
+def test_scan_saved_signal_summaries_reads_only_common_fields_when_legacy_top_level_source_fields_exist(tmp_path: Path) -> None:
+    legacy_only_summary = _build_summary(
+        signal_type="news",
+        source="coindesk_rss",
+        run_id="20260324T060000Z",
+        started_at="2026-03-24T06:00:00Z",
+        ended_at="2026-03-24T06:00:05Z",
+        topic_distribution={"bitcoin": 1},
+    )
+    legacy_only_summary.pop("source_specific")
+    legacy_only_summary["feed_url"] = "https://example.invalid/feed.xml"
+
+    _write_summary(tmp_path, "news", "coindesk_rss", "20260324T060000Z", legacy_only_summary)
+
+    entries = scan_saved_signal_summaries(tmp_path)
+    entry = next(item for item in entries if item["run_id"] == "20260324T060000Z")
+
+    assert entry["status"] == "completed"
+    assert entry["has_source_specific"] is False
+    assert entry["source_specific"] == {}
+    assert entry["topic_distribution"] == {"bitcoin": 1}
+
+
+def test_integrated_observer_exports_common_summary_schema_constants() -> None:
+    assert REQUIRED_SUMMARY_FIELDS == ("signal_type", "source", "run_id", "started_at", "ended_at", "status")
+    assert COMMON_DISTRIBUTION_FIELDS == ("topic_distribution", "symbol_distribution")
+    assert COUNT_FIELDS == (
+        "fetched_item_count",
+        "normalized_success_count",
+        "validation_failure_count",
+        "saved_record_count",
+        "duplicate_count",
+    )
+    assert "feed_url" in LEGACY_SOURCE_SPECIFIC_TOP_LEVEL_FIELDS
+    assert "listing_url" in LEGACY_SOURCE_SPECIFIC_TOP_LEVEL_FIELDS
 
 
 def test_build_integrated_summary_report_supports_latest_only_and_grouping(tmp_path: Path) -> None:

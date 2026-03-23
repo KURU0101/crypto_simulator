@@ -246,6 +246,8 @@ def load_sns_collector_config(config: object) -> dict:
 
 
 def _empty_observation(*, source: str, started_at: str, listing_url: str | None = None) -> dict:
+    # Some source-specific fields remain duplicated at the top level for
+    # compatibility, but `source_specific` is the preferred expansion point.
     observation = {
         "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
@@ -297,6 +299,8 @@ def _build_observation(
     warnings: list[str],
     source_context: dict | None = None,
 ) -> dict:
+    # This summary is the collector-run observation consumed later by the
+    # integrated observer through the common summary schema.
     source_distribution: dict[str, int] = {}
     group_distribution: dict[str, int] = {}
     group_theme_distribution: dict[str, int] = {}
@@ -407,9 +411,7 @@ def _build_observation(
     return observation
 
 
-def save_sns_collection_run(
-    bundle: dict,
-    observation: dict,
+def _build_saved_paths(
     *,
     output_dir: str,
     source: str,
@@ -418,22 +420,47 @@ def save_sns_collection_run(
 ) -> dict[str, str]:
     run_id = _run_id_from_iso8601(started_at)
     run_dir = Path(output_dir) / source / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths = {
+        "normalized": str(run_dir / "normalized.json"),
+    }
+    if save_run_summary:
+        saved_paths["summary"] = str(run_dir / "summary.json")
+    return saved_paths
 
-    normalized_path = run_dir / "normalized.json"
-    with normalized_path.open("w", encoding="utf-8") as file:
-        json.dump(bundle, file, ensure_ascii=False, indent=2)
+
+def _write_json_file(path: str | Path, payload: object) -> None:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
         file.write("\n")
 
-    saved_paths = {"normalized": str(normalized_path)}
-    if save_run_summary:
-        summary_path = run_dir / "summary.json"
-        with summary_path.open("w", encoding="utf-8") as file:
-            json.dump(observation, file, ensure_ascii=False, indent=2)
-            file.write("\n")
-        saved_paths["summary"] = str(summary_path)
 
-    return saved_paths
+def save_sns_collection_run(
+    bundle: dict,
+    observation: dict,
+    *,
+    output_dir: str,
+    source: str,
+    started_at: str,
+    save_run_summary: bool,
+    saved_paths: dict[str, str] | None = None,
+) -> dict[str, str]:
+    resolved_saved_paths = dict(
+        saved_paths
+        or _build_saved_paths(
+            output_dir=output_dir,
+            source=source,
+            started_at=started_at,
+            save_run_summary=save_run_summary,
+        )
+    )
+
+    _write_json_file(resolved_saved_paths["normalized"], bundle)
+    if save_run_summary and "summary" in resolved_saved_paths:
+        _write_json_file(resolved_saved_paths["summary"], observation)
+
+    return resolved_saved_paths
 
 
 def _run_reddit_sns_collector(
@@ -490,21 +517,7 @@ def _run_reddit_sns_collector(
 
     bundle = build_sns_signal_bundle(normalized_records)
     source_context = {"listing_url": collector["listing_url"]}
-    provisional_observation = _build_observation(
-        source=collector["source"],
-        started_at=started_at,
-        ended_at=_utc_now_iso(now_fn),
-        fetched_item_count=len(items),
-        normalized_records=normalized_records,
-        normalized_failures=normalized_failures,
-        missing_field_counts=missing_field_counts,
-        saved_paths={},
-        warnings=warnings,
-        source_context=source_context,
-    )
-    saved_paths = save_sns_collection_run(
-        bundle,
-        provisional_observation,
+    saved_paths = _build_saved_paths(
         output_dir=output["output_dir"],
         source=collector["source"],
         started_at=started_at,
@@ -522,11 +535,15 @@ def _run_reddit_sns_collector(
         warnings=warnings,
         source_context=source_context,
     )
-    if output["save_run_summary"] and "summary" in saved_paths:
-        summary_path = Path(saved_paths["summary"])
-        with summary_path.open("w", encoding="utf-8") as file:
-            json.dump(observation, file, ensure_ascii=False, indent=2)
-            file.write("\n")
+    save_sns_collection_run(
+        bundle,
+        observation,
+        output_dir=output["output_dir"],
+        source=collector["source"],
+        started_at=started_at,
+        save_run_summary=output["save_run_summary"],
+        saved_paths=saved_paths,
+    )
     return {"bundle": bundle, "observation": observation}
 
 
@@ -634,21 +651,7 @@ def _run_youtube_sns_collector(
         return {"bundle": build_sns_signal_bundle([]), "observation": observation}
 
     bundle = build_sns_signal_bundle(normalized_records)
-    provisional_observation = _build_observation(
-        source=collector["source"],
-        started_at=started_at,
-        ended_at=_utc_now_iso(now_fn),
-        fetched_item_count=fetched_item_count,
-        normalized_records=normalized_records,
-        normalized_failures=normalized_failures,
-        missing_field_counts=missing_field_counts,
-        saved_paths={},
-        warnings=warnings,
-        source_context=source_context,
-    )
-    saved_paths = save_sns_collection_run(
-        bundle,
-        provisional_observation,
+    saved_paths = _build_saved_paths(
         output_dir=output["output_dir"],
         source=collector["source"],
         started_at=started_at,
@@ -666,11 +669,15 @@ def _run_youtube_sns_collector(
         warnings=warnings,
         source_context=source_context,
     )
-    if output["save_run_summary"] and "summary" in saved_paths:
-        summary_path = Path(saved_paths["summary"])
-        with summary_path.open("w", encoding="utf-8") as file:
-            json.dump(observation, file, ensure_ascii=False, indent=2)
-            file.write("\n")
+    save_sns_collection_run(
+        bundle,
+        observation,
+        output_dir=output["output_dir"],
+        source=collector["source"],
+        started_at=started_at,
+        save_run_summary=output["save_run_summary"],
+        saved_paths=saved_paths,
+    )
     return {"bundle": bundle, "observation": observation}
 
 
@@ -759,21 +766,7 @@ def _run_hacker_news_sns_collector(
         warnings.append("Hacker News story list returned no ids")
 
     bundle = build_sns_signal_bundle(normalized_records)
-    provisional_observation = _build_observation(
-        source=collector["source"],
-        started_at=started_at,
-        ended_at=_utc_now_iso(now_fn),
-        fetched_item_count=fetched_item_count,
-        normalized_records=normalized_records,
-        normalized_failures=normalized_failures,
-        missing_field_counts=missing_field_counts,
-        saved_paths={},
-        warnings=warnings,
-        source_context=source_context,
-    )
-    saved_paths = save_sns_collection_run(
-        bundle,
-        provisional_observation,
+    saved_paths = _build_saved_paths(
         output_dir=output["output_dir"],
         source=collector["source"],
         started_at=started_at,
@@ -791,11 +784,15 @@ def _run_hacker_news_sns_collector(
         warnings=warnings,
         source_context=source_context,
     )
-    if output["save_run_summary"] and "summary" in saved_paths:
-        summary_path = Path(saved_paths["summary"])
-        with summary_path.open("w", encoding="utf-8") as file:
-            json.dump(observation, file, ensure_ascii=False, indent=2)
-            file.write("\n")
+    save_sns_collection_run(
+        bundle,
+        observation,
+        output_dir=output["output_dir"],
+        source=collector["source"],
+        started_at=started_at,
+        save_run_summary=output["save_run_summary"],
+        saved_paths=saved_paths,
+    )
     return {"bundle": bundle, "observation": observation}
 
 

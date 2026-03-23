@@ -159,6 +159,8 @@ source .venv/bin/activate
 python3 -m pytest
 ```
 
+`.venv` を有効化せずに直接実行する場合は、`.venv/bin/python3 -m pytest` を優先します。
+
 `Makefile` を使う場合:
 
 ```bash
@@ -166,7 +168,6 @@ source .venv/bin/activate
 make test
 ```
 
-comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
 comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
 
 ## 実データフェーズ
@@ -229,7 +230,7 @@ SNS は `source` / `timestamp` / `mention_count` / `positive_score` / `negative_
 
 News は `source` / `published_at` / `headline` / `relevance_score` / `sentiment_score` / `impact_score` / `category` と、`url` または `source_id`、さらに `symbol` / `asset` / `topic` のいずれかを持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_asset` / `by_topic` を返します。
 
-最小 news collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` をサポートし、いずれも RSS GET のみを行います。source ごとの adapter は collector 本体から分離し、保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/news_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `category_distribution` と `duplicate_count` を含む観測を残します。
+最小 news collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` をサポートし、いずれも RSS GET のみを行います。source ごとの adapter は collector 本体から分離し、保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/news_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `signal_type`、`category_distribution`、`duplicate_count`、`source_specific.feed_url` を含む観測を残します。
 
 最小 SNS collector は `reddit_subreddit_new_json` をサポートし、Reddit の公開 listing JSON を GET して `sns_signals` schema に正規化します。保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/sns_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `mention_count_summary` と `duplicate_count` を含む観測を残します。
 
@@ -242,13 +243,15 @@ SNS summary は、共通項目をトップレベルに維持しつつ、source �
 サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
 設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。
 
-ニュース collector の最小接続では CoinDesk RSS を 1 ソースだけ対象にし、`collector -> adapter -> save -> observe` を分離しています。raw RSS は保存せず、正規化後の bundle と観測 summary だけを `var/news_signals/<source>/<run_id>/` に保存します。
+ニュース collector でも `collector -> adapter -> save -> observe` を分離しています。各 example config は 1 source ごとの最小構成で、raw RSS は保存せず、正規化後の bundle と観測 summary だけを `var/news_signals/<source>/<run_id>/` に保存します。
 
 統合観測導線として `python3 scripts/observe_external_signals.py` を追加し、保存済み `var/news_signals/**/summary.json` と `var/sns_signals/**/summary.json` を横断して読めるようにしました。これは読み取り専用で、外部再取得も `simulate` 連携も行いません。
 
 既定の `condensed` 表示では collector ごとの最新状況を一覧でき、`--group-by overall|signal_type|source`、`--signal-type news|sns`、`--source <collector_source>`、`--latest-only` で見方を切り替えられます。`--format verbose` では `source_specific` と topic / symbol 分布の詳細、`--format json` では集約結果全体を JSON で確認できます。
 
 統合観測が見る共通項目は `signal_type` / `source` / `run_id` / `started_at` / `ended_at` / `status` / `fetched_item_count` / `normalized_success_count` / `validation_failure_count` / `saved_record_count` / `duplicate_count` / `warnings` / `errors` / `saved_paths` です。`source_specific` は無理に共通化せず、存在有無を一覧に出したうえで verbose 時だけ分けて表示します。
+
+互換維持のために一部 source 固有項目が summary トップレベルに残る場合がありますが、統合観測はそれらへ依存せず、共通項目と `source_specific` を優先して読みます。
 
 `summary.json` が欠損している run directory や、JSON として壊れている summary も観測結果に残します。今の制約は、集約対象が保存済み summary 中心であること、source ごとの差分は `source_specific` に残したまま最小限しか吸収しないこと、topic / symbol 分布は summary 側の既存集計に依存することです。
 
@@ -262,7 +265,7 @@ SNS summary は、共通項目をトップレベルに維持しつつ、source �
 ## 開発手順
 
 1. `origin/main` の最新を前提に作業する
-2. `main` 以外の feature branch で作業する
+2. `main` 以外の作業ブランチで作業する
 3. `.venv` を有効化してから実行・テストする
 4. 変更後は最低限 `python3 -m pytest` を実行する
 
