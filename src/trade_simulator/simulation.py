@@ -4,15 +4,25 @@ from __future__ import annotations
 def simulate(config: dict) -> dict:
     initial_cash = float(config["initial_cash"])
     returns = [float(period_return) for period_return in config["returns"]]
-    position = [bool(is_in_position) for is_in_position in config["position"]]
+    entry_signals = [bool(signal) for signal in config["entry_signals"]]
+    exit_signals = [bool(signal) for signal in config["exit_signals"]]
 
-    if len(returns) != len(position):
-        raise ValueError("returns and position must have the same length")
+    if len(returns) != len(entry_signals) or len(returns) != len(exit_signals):
+        raise ValueError("returns, entry_signals, and exit_signals must have the same length")
 
+    position = []
     equity_curve = [initial_cash]
     current_value = initial_cash
+    is_in_position = False
 
-    for period_return, is_in_position in zip(returns, position):
+    for period_return, entry_signal, exit_signal in zip(returns, entry_signals, exit_signals):
+        if entry_signal:
+            is_in_position = True
+        if exit_signal:
+            is_in_position = False
+
+        position.append(is_in_position)
+
         if is_in_position:
             current_value *= 1 + period_return
         equity_curve.append(current_value)
@@ -21,6 +31,8 @@ def simulate(config: dict) -> dict:
         "simulation_name": config["simulation_name"],
         "initial_cash": initial_cash,
         "returns": returns,
+        "entry_signals": entry_signals,
+        "exit_signals": exit_signals,
         "position": position,
         "equity_curve": equity_curve,
         "final_value": current_value,

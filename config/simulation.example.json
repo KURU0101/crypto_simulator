@@ -7,10 +7,16 @@
     0.03,
     0.01
   ],
-  "position": [
+  "entry_signals": [
     true,
     false,
     true,
-    true
+    false
+  ],
+  "exit_signals": [
+    false,
+    true,
+    false,
+    false
   ]
 }
