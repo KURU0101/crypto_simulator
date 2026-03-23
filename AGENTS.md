@@ -13,6 +13,7 @@
 - 必要に応じて `source .venv/bin/activate` を行う
 - 依存追加・更新時も `python3 -m pip` を使用する
 - 標準の実行コマンドは `python3 scripts/run_simulation.py --config config/simulation.example.json`
+- 疑似リアルタイム再生の標準コマンドは `python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json`
 - 標準のテストコマンドは `python3 -m pytest`
 - `Makefile` がある場合は、上記コマンドのエイリアスとして維持する
 

@@ -35,6 +35,20 @@ source .venv/bin/activate
 python3 scripts/run_simulation.py --config config/simulation.example.json
 ```
 
+実データ returns パイプラインの最小実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_real_data_comparisons.py --config config/real_data_comparison.example.json
+```
+
+疑似リアルタイム再生の最小実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json
+```
+
 `Makefile` を使う場合:
 
 ```bash
@@ -47,6 +61,20 @@ comparison を実行する場合:
 ```bash
 source .venv/bin/activate
 python3 scripts/run_comparisons.py --config config/comparison.example.json
+```
+
+実データ returns パイプラインを `Makefile` から呼ぶ場合:
+
+```bash
+source .venv/bin/activate
+make run-real-data
+```
+
+疑似リアルタイム再生を `Makefile` から呼ぶ場合:
+
+```bash
+source .venv/bin/activate
+make run-pseudo-realtime
 ```
 
 ## 手動確認
@@ -86,6 +114,33 @@ make test
 ```
 
 comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
+comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
+
+## 実データフェーズ
+
+実データフェーズは `OHLCV -> returns -> simulate -> comparison` の順で扱います。
+`simulate` に渡すのは常に `returns` と signals であり、生の OHLCV は直接渡しません。
+returns は close-to-close 定義で計算し、各 return はひとつ前の close から当該 timestamp の close までの変化率です。
+生成された returns の timestamp は後ろ側の close timestamp に揃えます。
+
+現在の最小構成では `BTC/USDT` のローカルサンプル OHLCV を [data/btcusdt_1h_sample.csv](/home/kuru0101/crypto_simulator/crypto_simulator/data/btcusdt_1h_sample.csv) に同梱しています。
+実データ comparison 用の設定例は [config/real_data_comparison.example.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/real_data_comparison.example.json) です。
+
+## 疑似リアルタイム再生
+
+疑似リアルタイム再生は、元の OHLCV CSV からワークCSVへ1行ずつ追記し、その時点のワークCSV全量を毎 tick 読み直して再評価します。
+初回実装では増分更新最適化は行わず、将来の外部入力追加時にも流れが揃うように I/O 境界込みで確認することを優先しています。
+
+`warmup_rows` は、起動直後に売買判断をせずデータ取得だけを行う行数です。
+判断開始後も warmup 中の履歴は strategy 計算の文脈として使えますが、warmup 対象期間の signal は無効化して、warmup 中に売買が始まらないようにしています。
+
+decision log の理由コードは以下の2系統に分けます。
+
+- `signal_reason_code`: signal の発生理由を表す。例: `threshold_entry_signal`, `cumulative_drop_exit_signal`, `no_signal`, `warmup_pending`
+- `action_reason_code`: その tick の状態変化を表す。例: `enter_position`, `exit_position`, `hold_position`, `stay_flat`, `warmup_skip`
+
+出力は初回実装では標準出力 JSON のみです。
+`trade_log` は最終 tick 時点の `simulate` 出力、`decision_log` と `equity_history` は各 tick ごとの再生ログです。
 
 ## ディレクトリ方針
 
