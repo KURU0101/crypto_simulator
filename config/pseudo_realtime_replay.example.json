@@ -1,0 +1,23 @@
+{
+  "data_source": {
+    "symbol": "BTC/USDT",
+    "ohlcv_csv_path": "data/btcusdt_1h_sample.csv"
+  },
+  "replay": {
+    "work_csv_path": "var/btcusdt_1h_replay_work.csv",
+    "warmup_rows": 3,
+    "mode": "fast",
+    "tick_interval_seconds": 0.0,
+    "emit_progress_log": true
+  },
+  "strategy": {
+    "name": "threshold_pseudo_realtime",
+    "simulation_name": "threshold_pseudo_realtime",
+    "strategy": "threshold",
+    "initial_cash": 100000,
+    "fee_rate": 0.0,
+    "slippage_rate": 0.0,
+    "entry_threshold": 0.01,
+    "exit_threshold": -0.004
+  }
+}
