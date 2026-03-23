@@ -1,0 +1,24 @@
+{
+  "simulation_name": "example_simulation",
+  "initial_cash": 100000,
+  "fee_rate": 0.0,
+  "slippage_rate": 0.0,
+  "returns": [
+    0.01,
+    -0.02,
+    0.03,
+    0.01
+  ],
+  "entry_signals": [
+    true,
+    false,
+    true,
+    false
+  ],
+  "exit_signals": [
+    false,
+    true,
+    false,
+    false
+  ]
+}

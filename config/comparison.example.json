@@ -1,0 +1,61 @@
+[
+  {
+    "name": "threshold_baseline",
+    "strategy": "threshold",
+    "simulation_name": "threshold_baseline",
+    "initial_cash": 100000,
+    "fee_rate": 0.0,
+    "slippage_rate": 0.0,
+    "returns": [0.004, -0.006, -0.004, -0.003, 0.006, -0.003, 0.012, -0.011, -0.007, -0.006, 0.01, 0.009],
+    "entry_threshold": 0.01,
+    "exit_threshold": -0.01
+  },
+  {
+    "name": "cumulative_drop_fast",
+    "strategy": "cumulative_drop",
+    "simulation_name": "cumulative_drop_fast",
+    "initial_cash": 100000,
+    "fee_rate": 0.0,
+    "slippage_rate": 0.0,
+    "returns": [0.004, -0.006, -0.004, -0.003, 0.006, -0.003, 0.012, -0.011, -0.007, -0.006, 0.01, 0.009],
+    "entry_window": 3,
+    "entry_cumulative_threshold": -0.01,
+    "exit_threshold": 0.005
+  },
+  {
+    "name": "cumulative_drop_strict",
+    "strategy": "cumulative_drop",
+    "simulation_name": "cumulative_drop_strict",
+    "initial_cash": 100000,
+    "fee_rate": 0.0,
+    "slippage_rate": 0.0,
+    "returns": [0.004, -0.006, -0.004, -0.003, 0.006, -0.003, 0.012, -0.011, -0.007, -0.006, 0.01, 0.009],
+    "entry_window": 5,
+    "entry_cumulative_threshold": -0.026,
+    "exit_threshold": 0.0075
+  },
+  {
+    "name": "consecutive_drop_fast",
+    "strategy": "consecutive_drop",
+    "simulation_name": "consecutive_drop_fast",
+    "initial_cash": 100000,
+    "fee_rate": 0.0,
+    "slippage_rate": 0.0,
+    "returns": [0.004, -0.006, -0.004, -0.003, 0.006, -0.003, 0.012, -0.011, -0.007, -0.006, 0.01, 0.009],
+    "consecutive_periods": 3,
+    "drop_threshold": -0.003,
+    "exit_threshold": 0.005
+  },
+  {
+    "name": "consecutive_drop_strict",
+    "strategy": "consecutive_drop",
+    "simulation_name": "consecutive_drop_strict",
+    "initial_cash": 100000,
+    "fee_rate": 0.0,
+    "slippage_rate": 0.0,
+    "returns": [0.004, -0.006, -0.004, -0.003, 0.006, -0.003, 0.012, -0.011, -0.007, -0.006, 0.01, 0.009],
+    "consecutive_periods": 4,
+    "drop_threshold": -0.005,
+    "exit_threshold": 0.0075
+  }
+]
