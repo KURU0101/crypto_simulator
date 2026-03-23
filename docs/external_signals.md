@@ -102,7 +102,7 @@ News 候補:
 
 ## Minimal News Collector
 
-今回の collector は `coindesk_rss` と `sec_press_releases_rss` の 2 ソースを対象にします。利用は公開 RSS の GET のみで、raw XML は保存しません。
+今回の collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` の 3 ソースを対象にします。利用は公開 RSS の GET のみで、raw XML は保存しません。
 
 採用した 2 本目:
 
@@ -117,6 +117,19 @@ CoinDesk との差分:
 - CoinDesk は BTC / ETH など symbol 推定しやすい記事が比較的多い
 - SEC は symbol 未割当の topic-only 正規化が主になりやすい
 - `source_id` はどちらも RSS `guid` を優先するが、SEC は link 末尾 fallback を持たせている
+
+採用した 3 本目:
+
+- `federal_reserve_press_releases_rss`
+- feed URL: `https://www.federalreserve.gov/feeds/press_all.xml`
+- 選定理由: Federal Reserve の公式 RSS で、SEC と同じ公的発表でも金融政策・銀行規制寄りの category を持ち、CoinDesk / SEC と異なる topic 分布を確認しやすいため
+
+既存 2 source との差分:
+
+- CoinDesk は crypto media の記事で、asset / symbol 推定しやすい
+- SEC は規制当局の執行・ルール系発表で、crypto regulation topic に寄りやすい
+- Federal Reserve は中央銀行の monetary policy / banking policy 系 category を持ち、crypto 非依存 topic-only 正規化が中心になりやすい
+- Federal Reserve は `guid` に URL が入るケースを想定し、adapter 側でそのまま locator に使える
 
 責務分離:
 
@@ -145,11 +158,13 @@ dedup key の生成規則:
 - seed は `source | published_at | locator_kind | locator_value | normalized_headline`
 - `locator_kind` は `source_id` を優先し、無ければ `url`、さらに無ければ `headline`
 - これは軽量 dedup 用であり、cross-source の完全な同一性保証は行わない
+- run summary の `duplicate_count` は、同一 run 内で `dedup_key` が重複した 2 件目以降の件数
 
 実行:
 
 - `python3 scripts/run_news_collector.py --config config/news_collector.example.json`
 - `python3 scripts/run_news_collector.py --config config/news_collector.sec.example.json`
+- `python3 scripts/run_news_collector.py --config config/news_collector.federal_reserve.example.json`
 
 保存:
 
@@ -157,6 +172,8 @@ dedup key の生成規則:
 - `var/news_signals/coindesk_rss/<run_id>/summary.json`
 - `var/news_signals/sec_press_releases_rss/<run_id>/normalized.json`
 - `var/news_signals/sec_press_releases_rss/<run_id>/summary.json`
+- `var/news_signals/federal_reserve_press_releases_rss/<run_id>/normalized.json`
+- `var/news_signals/federal_reserve_press_releases_rss/<run_id>/summary.json`
 
 観測できる項目:
 
@@ -171,6 +188,7 @@ dedup key の生成規則:
 - `normalized_failure_count`
 - `validation_failure_count`
 - `saved_record_count`
+- `duplicate_count`
 - `missing_field_counts`
 - `source_distribution`
 - `symbol_distribution`
@@ -189,11 +207,12 @@ source 増加で見えた制約:
 - RSS item 抽出は共通化できたが、topic / symbol / impact の推定は source 依存が強い
 - `missing_field_counts` は source 固有 required field 定義に依存する
 - dedup key は軽量比較用で、source 横断の同一イベント統合は次段に分離が必要
+- 同じ RSS でも item の追加フィールド差分が大きくなった場合は、共通 parser のままでは追従しづらくなる可能性がある
 
-3 本目以降の前に入れるとよい最小修正:
+次の最小整理候補:
 
 - source ごとの item parser 差分が出た場合は adapter と同じ粒度で parser も source 側へ寄せる
-- summary に dedup key の重複件数を追加する
 - source 横断比較用の低コストな canonical topic ルールを追加する
+- duplicate key の分布を summary に残す
 
 adapter の score は今回は収集導線確認用の固定/簡易ヒューリスティクスです。高度な sentiment や impact 推定は次段に分離します。

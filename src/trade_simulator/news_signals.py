@@ -117,6 +117,7 @@ def build_news_signal_bundle(records: object) -> dict:
         "max_relevance_score": max((record["relevance_score"] for record in normalized_records), default=None),
         "max_impact_score": max((record["impact_score"] for record in normalized_records), default=None),
         "unique_dedup_key_count": len({record["dedup_key"] for record in normalized_records}),
+        "duplicate_count": len(normalized_records) - len({record["dedup_key"] for record in normalized_records}),
     }
 
     return {

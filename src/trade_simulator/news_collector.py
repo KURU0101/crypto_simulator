@@ -12,9 +12,11 @@ from typing import Callable
 
 from trade_simulator.news_adapters import (
     COINDESK_RSS_FEED_URL,
+    FEDERAL_RESERVE_PRESS_RELEASES_RSS_FEED_URL,
     NEWS_SOURCE_PROFILES,
     SEC_PRESS_RELEASES_RSS_FEED_URL,
     adapt_coindesk_rss_item,
+    adapt_federal_reserve_press_release_rss_item,
     adapt_sec_press_release_rss_item,
 )
 from trade_simulator.news_signals import build_news_signal_bundle
@@ -165,6 +167,7 @@ def _empty_observation(*, source: str, feed_url: str, started_at: str) -> dict:
         "normalized_failure_count": 0,
         "validation_failure_count": 0,
         "saved_record_count": 0,
+        "duplicate_count": 0,
         "missing_field_counts": {},
         "source_distribution": {},
         "symbol_distribution": {},
@@ -199,6 +202,7 @@ def _build_observation(
     category_distribution: dict[str, int] = {}
     published_at_by_date: dict[str, int] = {}
     published_at_by_hour_utc: dict[str, int] = {}
+    unique_dedup_keys: set[str] = set()
 
     for record in normalized_records:
         source_distribution[record["source"]] = source_distribution.get(record["source"], 0) + 1
@@ -209,6 +213,7 @@ def _build_observation(
         if record["topic"] is not None:
             topic_distribution[record["topic"]] = topic_distribution.get(record["topic"], 0) + 1
         category_distribution[record["category"]] = category_distribution.get(record["category"], 0) + 1
+        unique_dedup_keys.add(record["dedup_key"])
         published_at = datetime.fromisoformat(record["published_at"].replace("Z", "+00:00"))
         day_key = published_at.strftime("%Y-%m-%d")
         hour_key = published_at.strftime("%Y-%m-%dT%H:00:00Z")
@@ -232,6 +237,7 @@ def _build_observation(
         "normalized_failure_count": len(normalized_failures),
         "validation_failure_count": len(normalized_failures),
         "saved_record_count": len(normalized_records),
+        "duplicate_count": len(normalized_records) - len(unique_dedup_keys),
         "missing_field_counts": missing_field_counts,
         "source_distribution": source_distribution,
         "symbol_distribution": symbol_distribution,
@@ -398,10 +404,12 @@ def build_news_collector_parser() -> argparse.ArgumentParser:
 
 __all__ = [
     "COINDESK_RSS_FEED_URL",
+    "FEDERAL_RESERVE_PRESS_RELEASES_RSS_FEED_URL",
     "NEWS_SOURCE_PROFILES",
     "NewsCollectorError",
     "SEC_PRESS_RELEASES_RSS_FEED_URL",
     "adapt_coindesk_rss_item",
+    "adapt_federal_reserve_press_release_rss_item",
     "adapt_sec_press_release_rss_item",
     "build_news_collector_parser",
     "fetch_coindesk_rss",

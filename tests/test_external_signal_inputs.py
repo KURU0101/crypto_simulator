@@ -227,6 +227,7 @@ def test_build_news_signal_bundle_groups_entities() -> None:
     assert bundle["summary"]["record_count"] == 2
     assert bundle["summary"]["categories"] == ["markets", "regulation"]
     assert bundle["summary"]["unique_dedup_key_count"] == 2
+    assert bundle["summary"]["duplicate_count"] == 0
     assert list(bundle["by_symbol"]) == ["BTCUSDT"]
     assert list(bundle["by_topic"]) == ["crypto regulation"]
 

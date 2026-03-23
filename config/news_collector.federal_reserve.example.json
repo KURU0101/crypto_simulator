@@ -1,0 +1,12 @@
+{
+  "collector": {
+    "source": "federal_reserve_press_releases_rss",
+    "feed_url": "https://www.federalreserve.gov/feeds/press_all.xml",
+    "timeout_seconds": 30,
+    "max_items": 20
+  },
+  "output": {
+    "output_dir": "var/news_signals",
+    "save_run_summary": true
+  }
+}
