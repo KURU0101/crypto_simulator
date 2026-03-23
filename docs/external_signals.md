@@ -98,22 +98,82 @@ News 候補:
 
 ## Minimal News Collector
 
-初回 collector は CoinDesk RSS を 1 ソースだけ対象にします。利用は公開 RSS の GET のみで、raw XML は保存しません。
+今回の collector は `coindesk_rss` と `sec_press_releases_rss` の 2 ソースを対象にします。利用は公開 RSS の GET のみで、raw XML は保存しません。
+
+採用した 2 本目:
+
+- `sec_press_releases_rss`
+- feed URL: `https://www.sec.gov/news/pressreleases.rss`
+- 選定理由: 無料公開 RSS で、CoinDesk と比べて「暗号資産専門メディア」ではなく「規制当局の公式発表」であり、topic 中心・symbol 未割当・source 固有 metadata の扱いを検証しやすいため
+
+CoinDesk との差分:
+
+- CoinDesk は crypto media 記事で、category が市場/政策など記事寄り
+- SEC は press release で、category が enforcement/rulemaking など制度寄り
+- CoinDesk は BTC / ETH など symbol 推定しやすい記事が比較的多い
+- SEC は symbol 未割当の topic-only 正規化が主になりやすい
+- `source_id` はどちらも RSS `guid` を優先するが、SEC は link 末尾 fallback を持たせている
 
 責務分離:
 
 - collector: RSS GET と XML item 抽出
 - adapter: item を `news_signals` schema へ正規化
 - save: 正規化後 bundle と観測 summary のみ保存
-- observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、symbol/topic 分布、published_at 分布、エラーを集計
+- observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、source/symbol/asset/topic 分布、published_at 分布、warning、error を集計
+
+source ごとの切り分け:
+
+- 共通: fetch、RSS parse、保存、run_id 生成、observation 集計
+- source 固有: default feed URL、item adapter、簡易 topic/symbol 分類
+- source 固有で吸収しきれない差分は `metadata` に逃がす
 
 実行:
 
 - `python3 scripts/run_news_collector.py --config config/news_collector.example.json`
+- `python3 scripts/run_news_collector.py --config config/news_collector.sec.example.json`
 
 保存:
 
 - `var/news_signals/coindesk_rss/<run_id>/normalized.json`
 - `var/news_signals/coindesk_rss/<run_id>/summary.json`
+- `var/news_signals/sec_press_releases_rss/<run_id>/normalized.json`
+- `var/news_signals/sec_press_releases_rss/<run_id>/summary.json`
+
+観測できる項目:
+
+- `run_id`
+- `started_at`
+- `ended_at`
+- `duration_seconds`
+- `source`
+- `feed_url`
+- `fetched_item_count`
+- `normalized_success_count`
+- `normalized_failure_count`
+- `validation_failure_count`
+- `saved_record_count`
+- `missing_field_counts`
+- `source_distribution`
+- `symbol_distribution`
+- `asset_distribution`
+- `topic_distribution`
+- `published_at_by_date`
+- `published_at_by_hour_utc`
+- `warnings`
+- `errors`
+- `saved_paths`
+
+source 増加で見えた制約:
+
+- collector 設定はまだ 1 run 1 source 固定で、複数 source 同時収集は未対応
+- RSS item 抽出は共通化できたが、topic / symbol / impact の推定は source 依存が強い
+- `missing_field_counts` は source 固有 required field 定義に依存する
+- dedup は未完成で、source 横断の同一イベント統合は次段に分離が必要
+
+3 本目以降の前に入れるとよい最小修正:
+
+- source ごとの adapter を別モジュールへ分離する
+- observation に category 分布を追加する
+- source 横断の軽量 dedup key を `metadata` ではなく共通 summary 層で扱う
 
 adapter の score は今回は収集導線確認用の固定/簡易ヒューリスティクスです。高度な sentiment や impact 推定は次段に分離します。

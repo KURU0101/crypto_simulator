@@ -1,0 +1,12 @@
+{
+  "collector": {
+    "source": "sec_press_releases_rss",
+    "feed_url": "https://www.sec.gov/news/pressreleases.rss",
+    "timeout_seconds": 30,
+    "max_items": 20
+  },
+  "output": {
+    "output_dir": "var/news_signals",
+    "save_run_summary": true
+  }
+}

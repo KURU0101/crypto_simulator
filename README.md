@@ -77,11 +77,12 @@ source .venv/bin/activate
 python3 scripts/summarize_news_signals.py --input data/signals/news/sample.json
 ```
 
-無料ニュースソース1本の最小収集例:
+無料ニュースソースの最小収集例:
 
 ```bash
 source .venv/bin/activate
 python3 scripts/run_news_collector.py --config config/news_collector.example.json
+python3 scripts/run_news_collector.py --config config/news_collector.sec.example.json
 ```
 
 `Makefile` を使う場合:
@@ -217,6 +218,8 @@ SNS / News は今回 `simulate` に直結せず、分析済みシグナルの受
 SNS は `source` / `timestamp` / `mention_count` / `positive_score` / `negative_score` / `neutral_score` / `activity_score` / `anomaly_score` と、`symbol` または `topic` を持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_topic` を返し、topic-only データも保持できます。
 
 News は `source` / `published_at` / `headline` / `relevance_score` / `sentiment_score` / `impact_score` / `category` と、`url` または `source_id`、さらに `symbol` / `asset` / `topic` のいずれかを持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_asset` / `by_topic` を返します。
+
+最小 news collector は `coindesk_rss` と `sec_press_releases_rss` をサポートし、いずれも RSS GET のみを行います。保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/news_signals/<collector_source>/<run_id>/` です。
 
 サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
 設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。

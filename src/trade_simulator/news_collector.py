@@ -15,6 +15,7 @@ from trade_simulator.news_signals import build_news_signal_bundle, normalize_new
 
 
 COINDESK_RSS_FEED_URL = "https://www.coindesk.com/arc/outboundfeeds/rss/"
+SEC_PRESS_RELEASES_RSS_FEED_URL = "https://www.sec.gov/news/pressreleases.rss"
 
 
 class NewsCollectorError(Exception):
@@ -47,37 +48,17 @@ def _validate_non_empty_string(value: object, name: str) -> str:
     return normalized
 
 
-def load_news_collector_config(config: object) -> dict:
-    if not isinstance(config, dict):
-        raise ValueError("news collector config must be a dict")
-    if "collector" not in config or not isinstance(config["collector"], dict):
-        raise ValueError("news collector config must include a collector dict")
-    if "output" not in config or not isinstance(config["output"], dict):
-        raise ValueError("news collector config must include an output dict")
-
-    collector = dict(config["collector"])
-    output = dict(config["output"])
-
-    collector["source"] = _validate_non_empty_string(collector.get("source"), "collector.source")
-    if collector["source"] != "coindesk_rss":
-        raise ValueError("collector.source must be coindesk_rss")
-    collector["feed_url"] = _validate_non_empty_string(
-        collector.get("feed_url", COINDESK_RSS_FEED_URL),
-        "collector.feed_url",
-    )
-    collector["timeout_seconds"] = _validate_positive_int(collector.get("timeout_seconds", 30), "collector.timeout_seconds")
-    collector["max_items"] = _validate_positive_int(collector.get("max_items", 50), "collector.max_items")
-
-    output["output_dir"] = _validate_non_empty_string(output.get("output_dir"), "output.output_dir")
-    output["save_run_summary"] = bool(output.get("save_run_summary", True))
-
-    return {
-        "collector": collector,
-        "output": output,
-    }
+def _normalize_rss_pub_date(pub_date: str) -> str:
+    try:
+        parsed = parsedate_to_datetime(pub_date)
+    except (TypeError, ValueError) as error:
+        raise ValueError("rss item pub_date is invalid") from error
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def fetch_coindesk_rss(
+def fetch_rss_feed(
     feed_url: str,
     *,
     timeout_seconds: int,
@@ -110,7 +91,16 @@ def fetch_coindesk_rss(
         return payload.decode("utf-8", errors="replace")
 
 
-def parse_coindesk_rss_items(xml_text: str, *, max_items: int) -> list[dict]:
+def fetch_coindesk_rss(
+    feed_url: str,
+    *,
+    timeout_seconds: int,
+    urlopen_fn: Callable[..., object] | None = None,
+) -> str:
+    return fetch_rss_feed(feed_url, timeout_seconds=timeout_seconds, urlopen_fn=urlopen_fn)
+
+
+def parse_rss_items(xml_text: str, *, max_items: int) -> list[dict]:
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as error:
@@ -132,11 +122,8 @@ def parse_coindesk_rss_items(xml_text: str, *, max_items: int) -> list[dict]:
     return items
 
 
-def _normalize_rss_pub_date(pub_date: str) -> str:
-    parsed = parsedate_to_datetime(pub_date)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+def parse_coindesk_rss_items(xml_text: str, *, max_items: int) -> list[dict]:
+    return parse_rss_items(xml_text, max_items=max_items)
 
 
 def _classify_coindesk_item(title: str, categories: list[str]) -> dict:
@@ -167,6 +154,47 @@ def _classify_coindesk_item(title: str, categories: list[str]) -> dict:
         "asset": None,
         "topic": topic,
         "relevance_score": 0.5,
+        "impact_score": 0.4,
+    }
+
+
+def _classify_sec_press_release_item(title: str, description: str, categories: list[str]) -> dict:
+    lowered_title = title.lower()
+    lowered_description = description.lower()
+    lowered_categories = " ".join(category.lower() for category in categories)
+    text = f"{lowered_title} {lowered_description} {lowered_categories}".strip()
+
+    if "bitcoin" in text or "btc" in text:
+        return {
+            "symbol": "BTCUSDT",
+            "asset": "BTC",
+            "topic": "bitcoin regulation",
+            "relevance_score": 0.85,
+            "impact_score": 0.85,
+        }
+    if "ethereum" in text or "ether" in text or "eth" in text:
+        return {
+            "symbol": "ETHUSDT",
+            "asset": "ETH",
+            "topic": "ethereum regulation",
+            "relevance_score": 0.8,
+            "impact_score": 0.8,
+        }
+    if any(keyword in text for keyword in ("crypto", "digital asset", "blockchain", "stablecoin", "token")):
+        return {
+            "symbol": None,
+            "asset": None,
+            "topic": "crypto regulation",
+            "relevance_score": 0.75,
+            "impact_score": 0.85,
+        }
+
+    category = categories[0].strip().lower() if categories else "press release"
+    return {
+        "symbol": None,
+        "asset": None,
+        "topic": f"sec {category}",
+        "relevance_score": 0.3,
         "impact_score": 0.4,
     }
 
@@ -210,8 +238,97 @@ def adapt_coindesk_rss_item(item: dict, *, fetched_at: str, feed_url: str) -> di
     return normalize_news_signal_record(record, entry_name="coindesk_rss_item")
 
 
+def adapt_sec_press_release_rss_item(item: dict, *, fetched_at: str, feed_url: str) -> dict:
+    if item.get("title") is None or not str(item["title"]).strip():
+        raise ValueError("rss item title is required")
+    if item.get("link") is None or not str(item["link"]).strip():
+        raise ValueError("rss item link is required")
+    if item.get("pub_date") is None or not str(item["pub_date"]).strip():
+        raise ValueError("rss item pub_date is required")
+
+    title = str(item["title"]).strip()
+    link = str(item["link"]).strip()
+    description = str(item.get("description") or "").strip()
+    pub_date = _normalize_rss_pub_date(str(item["pub_date"]).strip())
+    categories = [str(category).strip() for category in item.get("categories", []) if str(category).strip()]
+    classification = _classify_sec_press_release_item(title, description, categories)
+
+    category = categories[0] if categories else "press release"
+    source_id = item.get("guid") or link.rstrip("/").rsplit("/", maxsplit=1)[-1]
+    record = {
+        "source": "sec",
+        "symbol": classification["symbol"],
+        "asset": classification["asset"],
+        "topic": classification["topic"],
+        "published_at": pub_date,
+        "headline": title,
+        "url": link,
+        "source_id": source_id,
+        "relevance_score": classification["relevance_score"],
+        "sentiment_score": -0.1 if classification["topic"].endswith("regulation") else 0.0,
+        "impact_score": classification["impact_score"],
+        "category": category,
+        "metadata": {
+            "collector_source": "sec_press_releases_rss",
+            "feed_url": feed_url,
+            "fetched_at": fetched_at,
+            "categories": categories,
+            "description": description or None,
+        },
+    }
+    return normalize_news_signal_record(record, entry_name="sec_press_releases_rss_item")
+
+
+NEWS_SOURCE_PROFILES = {
+    "coindesk_rss": {
+        "default_feed_url": COINDESK_RSS_FEED_URL,
+        "required_item_fields": ("title", "link", "pub_date"),
+        "adapter": adapt_coindesk_rss_item,
+    },
+    "sec_press_releases_rss": {
+        "default_feed_url": SEC_PRESS_RELEASES_RSS_FEED_URL,
+        "required_item_fields": ("title", "link", "pub_date"),
+        "adapter": adapt_sec_press_release_rss_item,
+    },
+}
+
+
+def load_news_collector_config(config: object) -> dict:
+    if not isinstance(config, dict):
+        raise ValueError("news collector config must be a dict")
+    if "collector" not in config or not isinstance(config["collector"], dict):
+        raise ValueError("news collector config must include a collector dict")
+    if "output" not in config or not isinstance(config["output"], dict):
+        raise ValueError("news collector config must include an output dict")
+
+    collector = dict(config["collector"])
+    output = dict(config["output"])
+
+    collector["source"] = _validate_non_empty_string(collector.get("source"), "collector.source")
+    if collector["source"] not in NEWS_SOURCE_PROFILES:
+        supported = ", ".join(sorted(NEWS_SOURCE_PROFILES))
+        raise ValueError(f"collector.source must be one of: {supported}")
+
+    profile = NEWS_SOURCE_PROFILES[collector["source"]]
+    collector["feed_url"] = _validate_non_empty_string(
+        collector.get("feed_url", profile["default_feed_url"]),
+        "collector.feed_url",
+    )
+    collector["timeout_seconds"] = _validate_positive_int(collector.get("timeout_seconds", 30), "collector.timeout_seconds")
+    collector["max_items"] = _validate_positive_int(collector.get("max_items", 50), "collector.max_items")
+
+    output["output_dir"] = _validate_non_empty_string(output.get("output_dir"), "output.output_dir")
+    output["save_run_summary"] = bool(output.get("save_run_summary", True))
+
+    return {
+        "collector": collector,
+        "output": output,
+    }
+
+
 def _empty_observation(*, source: str, feed_url: str, started_at: str) -> dict:
     return {
+        "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
         "source": source,
         "feed_url": feed_url,
@@ -221,12 +338,16 @@ def _empty_observation(*, source: str, feed_url: str, started_at: str) -> dict:
         "fetched_item_count": 0,
         "normalized_success_count": 0,
         "normalized_failure_count": 0,
+        "validation_failure_count": 0,
         "saved_record_count": 0,
-        "missing_field_counts": {"title": 0, "link": 0, "pub_date": 0},
+        "missing_field_counts": {},
+        "source_distribution": {},
         "symbol_distribution": {},
+        "asset_distribution": {},
         "topic_distribution": {},
         "published_at_by_date": {},
         "published_at_by_hour_utc": {},
+        "warnings": [],
         "errors": [],
         "saved_paths": {},
     }
@@ -243,15 +364,21 @@ def _build_observation(
     normalized_failures: list[dict],
     missing_field_counts: dict[str, int],
     saved_paths: dict[str, str],
+    warnings: list[str],
 ) -> dict:
+    source_distribution: dict[str, int] = {}
     symbol_distribution: dict[str, int] = {}
+    asset_distribution: dict[str, int] = {}
     topic_distribution: dict[str, int] = {}
     published_at_by_date: dict[str, int] = {}
     published_at_by_hour_utc: dict[str, int] = {}
 
     for record in normalized_records:
+        source_distribution[record["source"]] = source_distribution.get(record["source"], 0) + 1
         if record["symbol"] is not None:
             symbol_distribution[record["symbol"]] = symbol_distribution.get(record["symbol"], 0) + 1
+        if record["asset"] is not None:
+            asset_distribution[record["asset"]] = asset_distribution.get(record["asset"], 0) + 1
         if record["topic"] is not None:
             topic_distribution[record["topic"]] = topic_distribution.get(record["topic"], 0) + 1
         published_at = datetime.fromisoformat(record["published_at"].replace("Z", "+00:00"))
@@ -265,6 +392,7 @@ def _build_observation(
     duration_seconds = (ended_at_dt - started_at_dt).total_seconds()
 
     return {
+        "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
         "source": source,
         "feed_url": feed_url,
@@ -274,12 +402,16 @@ def _build_observation(
         "fetched_item_count": fetched_item_count,
         "normalized_success_count": len(normalized_records),
         "normalized_failure_count": len(normalized_failures),
+        "validation_failure_count": len(normalized_failures),
         "saved_record_count": len(normalized_records),
         "missing_field_counts": missing_field_counts,
+        "source_distribution": source_distribution,
         "symbol_distribution": symbol_distribution,
+        "asset_distribution": asset_distribution,
         "topic_distribution": topic_distribution,
         "published_at_by_date": published_at_by_date,
         "published_at_by_hour_utc": published_at_by_hour_utc,
+        "warnings": warnings,
         "errors": normalized_failures,
         "saved_paths": saved_paths,
     }
@@ -323,8 +455,10 @@ def run_news_collector(
     validated = load_news_collector_config(config)
     collector = validated["collector"]
     output = validated["output"]
+    profile = NEWS_SOURCE_PROFILES[collector["source"]]
+
     if fetch_feed_fn is None:
-        fetch_feed_fn = fetch_coindesk_rss
+        fetch_feed_fn = fetch_rss_feed
     if now_fn is None:
         now_fn = time.time
 
@@ -336,7 +470,7 @@ def run_news_collector(
             collector["feed_url"],
             timeout_seconds=collector["timeout_seconds"],
         )
-        items = parse_coindesk_rss_items(xml_text, max_items=collector["max_items"])
+        items = parse_rss_items(xml_text, max_items=collector["max_items"])
     except Exception as error:
         ended_at = _utc_now_iso(now_fn)
         observation = dict(empty_observation)
@@ -352,18 +486,18 @@ def run_news_collector(
             "observation": observation,
         }
 
-    missing_field_counts = {"title": 0, "link": 0, "pub_date": 0}
+    missing_field_counts = {field_name: 0 for field_name in profile["required_item_fields"]}
     normalized_records: list[dict] = []
     normalized_failures: list[dict] = []
 
     for index, item in enumerate(items):
-        for field_name in ("title", "link", "pub_date"):
+        for field_name in profile["required_item_fields"]:
             if item.get(field_name) is None or not str(item[field_name]).strip():
                 missing_field_counts[field_name] += 1
 
         try:
             normalized_records.append(
-                adapt_coindesk_rss_item(
+                profile["adapter"](
                     item,
                     fetched_at=started_at,
                     feed_url=collector["feed_url"],
@@ -378,6 +512,10 @@ def run_news_collector(
                 }
             )
 
+    warnings: list[str] = []
+    if not items:
+        warnings.append("rss feed returned no items")
+
     bundle = build_news_signal_bundle(normalized_records)
     provisional_observation = _build_observation(
         source=collector["source"],
@@ -389,6 +527,7 @@ def run_news_collector(
         normalized_failures=normalized_failures,
         missing_field_counts=missing_field_counts,
         saved_paths={},
+        warnings=warnings,
     )
     saved_paths = save_news_collection_run(
         bundle,
@@ -408,6 +547,7 @@ def run_news_collector(
         normalized_failures=normalized_failures,
         missing_field_counts=missing_field_counts,
         saved_paths=saved_paths,
+        warnings=warnings,
     )
     if output["save_run_summary"] and "summary" in saved_paths:
         summary_path = Path(saved_paths["summary"])
@@ -429,12 +569,17 @@ def build_news_collector_parser() -> argparse.ArgumentParser:
 
 __all__ = [
     "COINDESK_RSS_FEED_URL",
+    "NEWS_SOURCE_PROFILES",
     "NewsCollectorError",
+    "SEC_PRESS_RELEASES_RSS_FEED_URL",
     "adapt_coindesk_rss_item",
+    "adapt_sec_press_release_rss_item",
     "build_news_collector_parser",
     "fetch_coindesk_rss",
+    "fetch_rss_feed",
     "load_news_collector_config",
     "parse_coindesk_rss_items",
+    "parse_rss_items",
     "run_news_collector",
     "save_news_collection_run",
 ]

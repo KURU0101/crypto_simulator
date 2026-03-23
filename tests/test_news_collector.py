@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from trade_simulator.news_collector import (
     COINDESK_RSS_FEED_URL,
+    NEWS_SOURCE_PROFILES,
     NewsCollectorError,
+    SEC_PRESS_RELEASES_RSS_FEED_URL,
     adapt_coindesk_rss_item,
+    adapt_sec_press_release_rss_item,
     load_news_collector_config,
     parse_coindesk_rss_items,
+    parse_rss_items,
     run_news_collector,
 )
 from trade_simulator.news_collector_cli import main as news_collector_main
@@ -39,20 +45,60 @@ RSS_TWO_ITEMS = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def test_load_news_collector_config_defaults_feed_url() -> None:
-    config = load_news_collector_config(
-        {
-            "collector": {
-                "source": "coindesk_rss",
-            },
-            "output": {
-                "output_dir": "var/news_signals",
-            },
-        }
-    )
+SEC_RSS_TWO_ITEMS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>SEC Press Releases</title>
+    <item>
+      <title>SEC Announces Digital Asset Enforcement Results</title>
+      <link>https://www.sec.gov/news/press-release/2026-50</link>
+      <guid>2026-50</guid>
+      <description>Statement on crypto and digital asset market oversight.</description>
+      <pubDate>Tue, 24 Mar 2026 03:00:00 GMT</pubDate>
+      <category>Enforcement</category>
+    </item>
+    <item>
+      <title>SEC Adopts Disclosure Rule Update</title>
+      <link>https://www.sec.gov/news/press-release/2026-51</link>
+      <guid>2026-51</guid>
+      <description>Update for public company disclosures.</description>
+      <pubDate>Tue, 24 Mar 2026 03:00:00 GMT</pubDate>
+      <category>Rulemaking</category>
+    </item>
+  </channel>
+</rss>
+"""
 
-    assert config["collector"]["feed_url"] == COINDESK_RSS_FEED_URL
-    assert config["collector"]["max_items"] == 50
+
+def test_load_news_collector_config_defaults_feed_url_for_each_supported_source() -> None:
+    for source, profile in NEWS_SOURCE_PROFILES.items():
+        config = load_news_collector_config(
+            {
+                "collector": {
+                    "source": source,
+                },
+                "output": {
+                    "output_dir": "var/news_signals",
+                },
+            }
+        )
+
+        assert config["collector"]["feed_url"] == profile["default_feed_url"]
+        assert config["collector"]["max_items"] == 50
+
+
+def test_load_news_collector_config_rejects_unsupported_source() -> None:
+    with pytest.raises(ValueError, match="collector.source must be one of"):
+        load_news_collector_config(
+            {
+                "collector": {
+                    "source": "unknown_rss",
+                },
+                "output": {
+                    "output_dir": "var/news_signals",
+                },
+            }
+        )
 
 
 def test_parse_coindesk_rss_items_respects_max_items() -> None:
@@ -60,6 +106,13 @@ def test_parse_coindesk_rss_items_respects_max_items() -> None:
 
     assert len(items) == 1
     assert items[0]["title"] == "Bitcoin rises as ETF flows improve"
+
+
+def test_parse_rss_items_accepts_same_timestamp_boundary_case() -> None:
+    items = parse_rss_items(SEC_RSS_TWO_ITEMS, max_items=2)
+
+    assert len(items) == 2
+    assert items[0]["pub_date"] == items[1]["pub_date"]
 
 
 def test_adapt_coindesk_rss_item_maps_symbol_and_metadata() -> None:
@@ -84,7 +137,30 @@ def test_adapt_coindesk_rss_item_maps_symbol_and_metadata() -> None:
     assert record["metadata"]["collector_source"] == "coindesk_rss"
 
 
-def test_run_news_collector_collects_normalized_records_and_saves_them(tmp_path: Path) -> None:
+def test_adapt_sec_press_release_rss_item_maps_topic_and_metadata() -> None:
+    record = adapt_sec_press_release_rss_item(
+        {
+            "title": "SEC Announces Digital Asset Enforcement Results",
+            "link": "https://www.sec.gov/news/press-release/2026-50",
+            "guid": "2026-50",
+            "description": "Statement on crypto and digital asset market oversight.",
+            "pub_date": "Tue, 24 Mar 2026 03:00:00 GMT",
+            "categories": ["Enforcement"],
+        },
+        fetched_at="2026-03-24T03:10:00Z",
+        feed_url=SEC_PRESS_RELEASES_RSS_FEED_URL,
+    )
+
+    assert record["source"] == "sec"
+    assert record["symbol"] is None
+    assert record["asset"] is None
+    assert record["topic"] == "crypto regulation"
+    assert record["published_at"] == "2026-03-24T03:00:00Z"
+    assert record["source_id"] == "2026-50"
+    assert record["metadata"]["collector_source"] == "sec_press_releases_rss"
+
+
+def test_run_news_collector_collects_coindesk_records_and_saves_them(tmp_path: Path) -> None:
     config = {
         "collector": {
             "source": "coindesk_rss",
@@ -106,18 +182,61 @@ def test_run_news_collector_collects_normalized_records_and_saves_them(tmp_path:
 
     observation = result["observation"]
     assert observation["status"] == "completed"
+    assert observation["source"] == "coindesk_rss"
+    assert observation["run_id"] == "20260320T094640Z"
     assert observation["fetched_item_count"] == 2
     assert observation["normalized_success_count"] == 2
-    assert observation["normalized_failure_count"] == 0
+    assert observation["validation_failure_count"] == 0
     assert observation["saved_record_count"] == 2
     assert observation["symbol_distribution"] == {"BTCUSDT": 1}
+    assert observation["asset_distribution"] == {"BTC": 1}
     assert observation["topic_distribution"]["bitcoin"] == 1
     assert observation["topic_distribution"]["policy"] == 1
+    assert observation["source_distribution"] == {"coindesk": 2}
     assert Path(observation["saved_paths"]["normalized"]).exists()
     assert Path(observation["saved_paths"]["summary"]).exists()
 
     saved_bundle = json.loads(Path(observation["saved_paths"]["normalized"]).read_text(encoding="utf-8"))
     assert saved_bundle["summary"]["record_count"] == 2
+
+
+def test_run_news_collector_collects_sec_records_and_tracks_source_specific_summary(tmp_path: Path) -> None:
+    config = {
+        "collector": {
+            "source": "sec_press_releases_rss",
+            "feed_url": SEC_PRESS_RELEASES_RSS_FEED_URL,
+            "timeout_seconds": 30,
+            "max_items": 10,
+        },
+        "output": {
+            "output_dir": str(tmp_path / "var"),
+            "save_run_summary": True,
+        },
+    }
+
+    result = run_news_collector(
+        config,
+        fetch_feed_fn=lambda feed_url, timeout_seconds: SEC_RSS_TWO_ITEMS,
+        now_fn=lambda: 1_774_000_000.0,
+    )
+
+    observation = result["observation"]
+    assert observation["status"] == "completed"
+    assert observation["source"] == "sec_press_releases_rss"
+    assert observation["fetched_item_count"] == 2
+    assert observation["normalized_success_count"] == 2
+    assert observation["normalized_failure_count"] == 0
+    assert observation["saved_record_count"] == 2
+    assert observation["source_distribution"] == {"sec": 2}
+    assert observation["symbol_distribution"] == {}
+    assert observation["asset_distribution"] == {}
+    assert observation["topic_distribution"]["crypto regulation"] == 1
+    assert observation["topic_distribution"]["sec rulemaking"] == 1
+    assert observation["published_at_by_hour_utc"] == {"2026-03-24T03:00:00Z": 2}
+    assert Path(observation["saved_paths"]["summary"]).exists()
+
+    saved_bundle = json.loads(Path(observation["saved_paths"]["normalized"]).read_text(encoding="utf-8"))
+    assert saved_bundle["summary"]["sources"] == ["sec"]
 
 
 def test_run_news_collector_handles_empty_feed_boundary_case(tmp_path: Path) -> None:
@@ -139,9 +258,10 @@ def test_run_news_collector_handles_empty_feed_boundary_case(tmp_path: Path) -> 
     assert result["observation"]["status"] == "completed"
     assert result["observation"]["fetched_item_count"] == 0
     assert result["observation"]["saved_record_count"] == 0
+    assert result["observation"]["warnings"] == ["rss feed returned no items"]
 
 
-def test_run_news_collector_records_normalization_failures(tmp_path: Path) -> None:
+def test_run_news_collector_records_normalization_failures_for_missing_required_fields(tmp_path: Path) -> None:
     xml_text = """<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0">
       <channel>
@@ -169,8 +289,76 @@ def test_run_news_collector_records_normalization_failures(tmp_path: Path) -> No
     )
 
     assert result["observation"]["normalized_success_count"] == 0
-    assert result["observation"]["normalized_failure_count"] == 1
+    assert result["observation"]["validation_failure_count"] == 1
     assert result["observation"]["missing_field_counts"]["link"] == 1
+
+
+def test_run_news_collector_records_invalid_published_at_as_validation_failure(tmp_path: Path) -> None:
+    xml_text = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title>SEC Announces Digital Asset Enforcement Results</title>
+          <link>https://www.sec.gov/news/press-release/2026-50</link>
+          <guid>2026-50</guid>
+          <description>Statement on crypto and digital asset market oversight.</description>
+          <pubDate>invalid date</pubDate>
+          <category>Enforcement</category>
+        </item>
+      </channel>
+    </rss>
+    """
+    config = {
+        "collector": {
+            "source": "sec_press_releases_rss",
+        },
+        "output": {
+            "output_dir": str(tmp_path / "var"),
+        },
+    }
+
+    result = run_news_collector(
+        config,
+        fetch_feed_fn=lambda feed_url, timeout_seconds: xml_text,
+        now_fn=lambda: 1_774_000_000.0,
+    )
+
+    assert result["observation"]["normalized_success_count"] == 0
+    assert result["observation"]["validation_failure_count"] == 1
+    assert "rss item pub_date is invalid" == result["observation"]["errors"][0]["message"]
+
+
+def test_run_news_collector_records_missing_title_for_sec_source(tmp_path: Path) -> None:
+    xml_text = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <link>https://www.sec.gov/news/press-release/2026-50</link>
+          <guid>2026-50</guid>
+          <description>Statement on crypto and digital asset market oversight.</description>
+          <pubDate>Tue, 24 Mar 2026 03:00:00 GMT</pubDate>
+          <category>Enforcement</category>
+        </item>
+      </channel>
+    </rss>
+    """
+    config = {
+        "collector": {
+            "source": "sec_press_releases_rss",
+        },
+        "output": {
+            "output_dir": str(tmp_path / "var"),
+        },
+    }
+
+    result = run_news_collector(
+        config,
+        fetch_feed_fn=lambda feed_url, timeout_seconds: xml_text,
+        now_fn=lambda: 1_774_000_000.0,
+    )
+
+    assert result["observation"]["validation_failure_count"] == 1
+    assert result["observation"]["missing_field_counts"]["title"] == 1
 
 
 def test_run_news_collector_handles_fetch_failure(tmp_path: Path) -> None:
@@ -198,8 +386,8 @@ def test_news_collector_cli_prints_observation_summary(tmp_path: Path, monkeypat
         json.dumps(
             {
                 "collector": {
-                    "source": "coindesk_rss",
-                    "feed_url": COINDESK_RSS_FEED_URL,
+                    "source": "sec_press_releases_rss",
+                    "feed_url": SEC_PRESS_RELEASES_RSS_FEED_URL,
                     "timeout_seconds": 30,
                     "max_items": 10,
                 },
@@ -216,11 +404,13 @@ def test_news_collector_cli_prints_observation_summary(tmp_path: Path, monkeypat
             "bundle": {"records": []},
             "observation": {
                 "status": "completed",
-                "source": "coindesk_rss",
+                "source": "sec_press_releases_rss",
                 "fetched_item_count": 0,
                 "normalized_success_count": 0,
                 "normalized_failure_count": 0,
+                "validation_failure_count": 0,
                 "saved_record_count": 0,
+                "warnings": [],
                 "errors": [],
                 "saved_paths": {},
             },
@@ -233,4 +423,4 @@ def test_news_collector_cli_prints_observation_summary(tmp_path: Path, monkeypat
 
     assert exit_code == 0
     assert captured["status"] == "completed"
-    assert captured["source"] == "coindesk_rss"
+    assert captured["source"] == "sec_press_releases_rss"
