@@ -49,6 +49,13 @@ source .venv/bin/activate
 python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json
 ```
 
+リアルタイム判定ランナーの最小実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_live_decision_runner.py --config config/live_decision_runner.example.json
+```
+
 `Makefile` を使う場合:
 
 ```bash
@@ -75,6 +82,13 @@ make run-real-data
 ```bash
 source .venv/bin/activate
 make run-pseudo-realtime
+```
+
+リアルタイム判定ランナーを `Makefile` から呼ぶ場合:
+
+```bash
+source .venv/bin/activate
+make run-live-decision
 ```
 
 ## 手動確認
@@ -141,6 +155,17 @@ decision log の理由コードは以下の2系統に分けます。
 
 出力は初回実装では標準出力 JSON のみです。
 `trade_log` は最終 tick 時点の `simulate` 出力、`decision_log` と `equity_history` は各 tick ごとの再生ログです。
+
+## リアルタイム判定ランナー
+
+リアルタイム判定ランナーは Binance Spot REST `/api/v3/klines` を一定間隔で poll し、1 分足の確定足だけで戦略判断を継続する外側レイヤです。
+注文送信や実売買は行わず、`OHLCV -> returns -> signals -> simulate` の責務分離を維持します。
+
+初回 poll では直近の confirmed OHLCV を履歴コンテキストとして取り込み、その時点の最新確定足を 1 回だけ評価します。
+以後は `last_confirmed_timestamp` を保持し、同一 timestamp の足では再判断せず、新しく確定した 1 分足だけを順次評価します。
+
+標準出力は `summary` と `decision_log` の先頭 / 末尾の一部だけに制限し、全量ログは `output_dir` 配下の JSON ファイルに保存します。
+429 受信時は最小限の retry / backoff を行い、`X-MBX-USED-WEIGHT-1M` が返る場合は decision / progress 文脈と summary に残します。
 
 ## ディレクトリ方針
 

@@ -12,3 +12,5 @@ OHLCV からの returns は close-to-close で計算し、生 OHLCV を simulate
 実データ comparison は `python3 scripts/run_real_data_comparisons.py --config config/real_data_comparison.example.json` で確認できます。
 `pseudo_realtime_replay.example.json` は元 OHLCV CSV をワークCSVへ1行ずつ追記し、各 tick でワークCSV全量を読み直して再評価する例です。`replay.work_csv_path` が追記先、`replay.warmup_rows` が起動直後に判断しない行数です。
 疑似リアルタイム再生は `python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json` で確認できます。
+`live_decision_runner.example.json` は Binance Spot REST `/api/v3/klines` を 1 分ごとに poll し、1 分足の確定足だけで戦略判断を継続する例です。`data_source.interval` は初期実装では `1m` 固定、`runtime.duration_seconds` は既定で 600、`output.output_dir` に `summary.json` / `decision_log.json` / `trade_log.json` / `equity_history.json` / `progress_log.json` を保存します。
+リアルタイム判定ランナーは `python3 scripts/run_live_decision_runner.py --config config/live_decision_runner.example.json` で確認できます。
