@@ -154,6 +154,8 @@ def load_news_collector_config(config: object) -> dict:
 
 
 def _empty_observation(*, source: str, feed_url: str, started_at: str) -> dict:
+    # `feed_url` is duplicated at the top level and in `source_specific` only
+    # for compatibility with existing saved summaries and docs.
     return {
         "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
@@ -199,6 +201,8 @@ def _build_observation(
     saved_paths: dict[str, str],
     warnings: list[str],
 ) -> dict:
+    # This summary is the collector-run observation. It is later read by the
+    # integrated observer using only the common summary fields.
     source_distribution: dict[str, int] = {}
     symbol_distribution: dict[str, int] = {}
     asset_distribution: dict[str, int] = {}

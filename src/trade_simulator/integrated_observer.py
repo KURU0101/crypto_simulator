@@ -49,6 +49,7 @@ LEGACY_SOURCE_SPECIFIC_TOP_LEVEL_FIELDS = (
 
 
 def scan_saved_signal_summaries(root_dir: str | Path = "var") -> list[dict]:
+    """Read saved external-signal run summaries using only the common schema."""
     root_path = Path(root_dir)
     entries: list[dict] = []
 
@@ -177,6 +178,7 @@ def _apply_common_summary_fields(
     default_source: str,
     default_run_id: str,
 ) -> None:
+    """Populate one observer entry from summary fields that are shared across sources."""
     entry["run_id"] = _read_string(payload.get("run_id")) or default_run_id
     entry["signal_type"] = _read_string(payload.get("signal_type")) or default_signal_type
     entry["source"] = _read_string(payload.get("source")) or default_source
@@ -340,8 +342,8 @@ def _normalize_source_specific(payload: dict) -> dict:
         return normalized
 
     # Compatibility note: old summaries may still duplicate source-specific
-    # fields at the top level. The integrated observer keeps reading only the
-    # common schema and therefore does not promote those legacy fields.
+    # fields at the top level. The integrated observer intentionally ignores
+    # them so that new source additions do not create hidden dependencies.
     return {}
 
 

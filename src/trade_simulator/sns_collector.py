@@ -246,6 +246,8 @@ def load_sns_collector_config(config: object) -> dict:
 
 
 def _empty_observation(*, source: str, started_at: str, listing_url: str | None = None) -> dict:
+    # Some source-specific fields remain duplicated at the top level for
+    # compatibility, but `source_specific` is the preferred expansion point.
     observation = {
         "run_id": _run_id_from_iso8601(started_at),
         "status": "completed",
@@ -297,6 +299,8 @@ def _build_observation(
     warnings: list[str],
     source_context: dict | None = None,
 ) -> dict:
+    # This summary is the collector-run observation consumed later by the
+    # integrated observer through the common summary schema.
     source_distribution: dict[str, int] = {}
     group_distribution: dict[str, int] = {}
     group_theme_distribution: dict[str, int] = {}
