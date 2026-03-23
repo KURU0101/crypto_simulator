@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from numbers import Real
+from typing import Callable
 
 from trade_simulator.simulation import simulate
 
@@ -30,6 +31,39 @@ def _validate_positive_int(value: object, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be greater than 0")
     return value
+
+
+def _generate_window_strategy_signals(
+    validated_returns: list[float],
+    validated_exit_threshold: float,
+    is_entry_ready: Callable[[int], bool],
+    should_enter: Callable[[int], bool],
+) -> tuple[list[bool], list[bool]]:
+    entry_signals = []
+    exit_signals = []
+    is_in_position = False
+
+    for period_index, period_return in enumerate(validated_returns):
+        if is_in_position:
+            should_exit = period_return >= validated_exit_threshold
+            entry_signals.append(False)
+            exit_signals.append(should_exit)
+            if should_exit:
+                is_in_position = False
+            continue
+
+        if not is_entry_ready(period_index):
+            entry_signals.append(False)
+            exit_signals.append(False)
+            continue
+
+        entered = should_enter(period_index)
+        entry_signals.append(entered)
+        exit_signals.append(False)
+        if entered:
+            is_in_position = True
+
+    return entry_signals, exit_signals
 
 
 def generate_threshold_signals(
@@ -75,34 +109,21 @@ def generate_cumulative_drop_signals(
     )
     validated_exit_threshold = _validate_numeric(exit_threshold, "exit_threshold")
 
-    entry_signals = []
-    exit_signals = []
-    is_in_position = False
+    def is_entry_ready(period_index: int) -> bool:
+        return period_index + 1 >= validated_entry_window
 
-    for period_index, period_return in enumerate(validated_returns):
-        if is_in_position:
-            should_exit = period_return >= validated_exit_threshold
-            entry_signals.append(False)
-            exit_signals.append(should_exit)
-            if should_exit:
-                is_in_position = False
-            continue
-
-        if period_index + 1 < validated_entry_window:
-            entry_signals.append(False)
-            exit_signals.append(False)
-            continue
-
+    def should_enter(period_index: int) -> bool:
         cumulative_return = sum(
             validated_returns[period_index - validated_entry_window + 1 : period_index + 1]
         )
-        should_enter = cumulative_return <= validated_entry_cumulative_threshold
-        entry_signals.append(should_enter)
-        exit_signals.append(False)
-        if should_enter:
-            is_in_position = True
+        return cumulative_return <= validated_entry_cumulative_threshold
 
-    return entry_signals, exit_signals
+    return _generate_window_strategy_signals(
+        validated_returns,
+        validated_exit_threshold,
+        is_entry_ready,
+        should_enter,
+    )
 
 
 def generate_consecutive_drop_signals(
@@ -116,34 +137,21 @@ def generate_consecutive_drop_signals(
     validated_drop_threshold = _validate_numeric(drop_threshold, "drop_threshold")
     validated_exit_threshold = _validate_numeric(exit_threshold, "exit_threshold")
 
-    entry_signals = []
-    exit_signals = []
-    is_in_position = False
+    def is_entry_ready(period_index: int) -> bool:
+        return period_index + 1 >= validated_consecutive_periods
 
-    for period_index, period_return in enumerate(validated_returns):
-        if is_in_position:
-            should_exit = period_return >= validated_exit_threshold
-            entry_signals.append(False)
-            exit_signals.append(should_exit)
-            if should_exit:
-                is_in_position = False
-            continue
-
-        if period_index + 1 < validated_consecutive_periods:
-            entry_signals.append(False)
-            exit_signals.append(False)
-            continue
-
+    def should_enter(period_index: int) -> bool:
         recent_returns = validated_returns[
             period_index - validated_consecutive_periods + 1 : period_index + 1
         ]
-        should_enter = all(period <= validated_drop_threshold for period in recent_returns)
-        entry_signals.append(should_enter)
-        exit_signals.append(False)
-        if should_enter:
-            is_in_position = True
+        return all(period <= validated_drop_threshold for period in recent_returns)
 
-    return entry_signals, exit_signals
+    return _generate_window_strategy_signals(
+        validated_returns,
+        validated_exit_threshold,
+        is_entry_ready,
+        should_enter,
+    )
 
 
 def _simulate_with_generated_signals(config: dict, entry_signals: list[bool], exit_signals: list[bool]) -> dict:

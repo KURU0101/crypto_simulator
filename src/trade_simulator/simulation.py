@@ -22,6 +22,7 @@ def simulate(config: dict) -> dict:
     is_in_position = False
     trade_log = []
     active_trade = None
+    total_cost_amount = 0.0
 
     for period_index, (period_return, entry_signal, exit_signal) in enumerate(
         zip(returns, entry_signals, exit_signals)
@@ -42,7 +43,9 @@ def simulate(config: dict) -> dict:
 
         event_count = int(executed_entry) + int(executed_exit)
         if event_count:
-            current_value -= current_value * (fee_rate + slippage_rate) * event_count
+            cost_amount = current_value * (fee_rate + slippage_rate) * event_count
+            current_value -= cost_amount
+            total_cost_amount += cost_amount
 
         if executed_entry:
             active_trade = {
@@ -107,6 +110,7 @@ def simulate(config: dict) -> dict:
         "losing_trades": losing_trades,
         "realized_pnl_total": realized_pnl_total,
         "average_holding_period": average_holding_period,
+        "total_cost_amount": total_cost_amount,
         "equity_curve": equity_curve,
         "final_value": current_value,
     }

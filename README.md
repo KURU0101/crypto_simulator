@@ -42,6 +42,13 @@ source .venv/bin/activate
 make run
 ```
 
+comparison を実行する場合:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_comparisons.py --config config/comparison.example.json
+```
+
 ## 手動確認
 
 `python3 scripts/run_simulation.py --config config/simulation.example.json` を実行し、出力 JSON の以下を確認します。
@@ -54,6 +61,13 @@ make run
 - `final_value`
 
 例の設定では 2 期間目は `exit_signals` により非保有となるため資産は据え置きになり、`position` は `[true, false, true, true]`、`final_value` は `1050703.0` になります。
+
+## Simulation Input Boundary
+
+- `simulate` は `returns` 系列と、同じ長さの `entry_signals` / `exit_signals` を受ける層とする
+- raw OHLCV、取引所レスポンス、外部 API の生データは `simulate` に直接渡さない
+- 実データ取得処理は `simulate` の前段に置き、前処理で `returns` 系列や必要な配列を作ってから渡す
+- strategy 実装は、その前処理済み系列から signal を作るか、comparison で signal 生成付き simulation を呼ぶ想定とする
 
 ## テスト
 
@@ -70,6 +84,8 @@ python3 -m pytest
 source .venv/bin/activate
 make test
 ```
+
+comparison summary では、既存の `final_value` / `trade_count` / `win_rate` に加えて、`completed_trade_count`、`open_trade_count`、`average_pnl_per_completed_trade`、`total_realized_pnl`、`total_cost_amount` を確認できます。
 
 ## ディレクトリ方針
 
