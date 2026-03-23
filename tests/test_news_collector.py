@@ -300,6 +300,8 @@ def test_run_news_collector_collects_coindesk_records_and_saves_them(tmp_path: P
     assert saved_bundle["summary"]["unique_dedup_key_count"] == 2
     assert saved_bundle["summary"]["duplicate_count"] == 0
     assert "dedup_key" in saved_bundle["records"][0]
+    saved_summary = json.loads(Path(observation["saved_paths"]["summary"]).read_text(encoding="utf-8"))
+    assert saved_summary == observation
 
 
 def test_run_news_collector_collects_sec_records_and_tracks_source_specific_summary(tmp_path: Path) -> None:
@@ -347,6 +349,30 @@ def test_run_news_collector_collects_sec_records_and_tracks_source_specific_summ
     saved_summary = json.loads(Path(observation["saved_paths"]["summary"]).read_text(encoding="utf-8"))
     assert saved_summary["signal_type"] == "news"
     assert saved_summary["source_specific"] == {"feed_url": SEC_PRESS_RELEASES_RSS_FEED_URL}
+
+
+def test_run_news_collector_skips_summary_file_when_disabled_boundary_case(tmp_path: Path) -> None:
+    config = {
+        "collector": {
+            "source": "coindesk_rss",
+            "feed_url": COINDESK_RSS_FEED_URL,
+        },
+        "output": {
+            "output_dir": str(tmp_path / "var"),
+            "save_run_summary": False,
+        },
+    }
+
+    result = run_news_collector(
+        config,
+        fetch_feed_fn=lambda feed_url, timeout_seconds: RSS_TWO_ITEMS,
+        now_fn=lambda: 1_774_000_000.0,
+    )
+
+    observation = result["observation"]
+    assert observation["status"] == "completed"
+    assert "summary" not in observation["saved_paths"]
+    assert Path(observation["saved_paths"]["normalized"]).exists()
 
 
 def test_run_news_collector_collects_federal_reserve_records_and_saves_them(tmp_path: Path) -> None:

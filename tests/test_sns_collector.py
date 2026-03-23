@@ -188,6 +188,8 @@ def test_run_sns_collector_collects_reddit_records_and_saves_them(tmp_path: Path
     assert saved_bundle["summary"]["total_mentions"] == 12
     assert saved_bundle["summary"]["unique_dedup_key_count"] == 2
     assert saved_bundle["summary"]["duplicate_count"] == 0
+    saved_summary = json.loads(Path(observation["saved_paths"]["summary"]).read_text(encoding="utf-8"))
+    assert saved_summary == observation
 
 
 def test_run_sns_collector_handles_empty_listing_boundary_case(tmp_path: Path) -> None:
