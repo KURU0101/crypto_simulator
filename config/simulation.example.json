@@ -1,6 +1,8 @@
 {
   "simulation_name": "example_simulation",
   "initial_cash": 1000000,
+  "fee_rate": 0.0,
+  "slippage_rate": 0.0,
   "returns": [
     0.01,
     -0.02,

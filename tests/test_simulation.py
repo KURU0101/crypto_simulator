@@ -15,15 +15,19 @@ def test_load_config() -> None:
 
     assert config["simulation_name"] == "example_simulation"
     assert config["initial_cash"] == 1000000
+    assert config["fee_rate"] == 0.0
+    assert config["slippage_rate"] == 0.0
     assert config["returns"] == [0.01, -0.02, 0.03, 0.01]
     assert config["entry_signals"] == [True, False, True, False]
     assert config["exit_signals"] == [False, True, False, False]
 
 
-def test_simulate_matches_manually_verified_example() -> None:
+def test_simulate_matches_manually_verified_example_with_zero_costs() -> None:
     config = {
         "simulation_name": "example_simulation",
         "initial_cash": 1000000.0,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
         "returns": [0.01, -0.02, 0.03, 0.01],
         "entry_signals": [True, False, True, False],
         "exit_signals": [False, True, False, False],
@@ -31,6 +35,8 @@ def test_simulate_matches_manually_verified_example() -> None:
 
     result = simulate(config)
 
+    assert result["fee_rate"] == 0.0
+    assert result["slippage_rate"] == 0.0
     assert result["position"] == [True, False, True, True]
     assert result["trade_count"] == 2
     assert result["periods_in_position"] == 3
@@ -43,6 +49,8 @@ def test_simulate_returns_expected_result_fields() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
         "returns": [0.1, -0.05, 0.02],
         "entry_signals": [True, False, False],
         "exit_signals": [False, True, False],
@@ -56,6 +64,8 @@ def test_simulate_returns_expected_result_fields() -> None:
         "returns",
         "entry_signals",
         "exit_signals",
+        "fee_rate",
+        "slippage_rate",
         "position",
         "trade_count",
         "periods_in_position",
@@ -66,6 +76,8 @@ def test_simulate_returns_expected_result_fields() -> None:
     assert result["returns"] == [0.1, -0.05, 0.02]
     assert result["entry_signals"] == [True, False, False]
     assert result["exit_signals"] == [False, True, False]
+    assert result["fee_rate"] == 0.0
+    assert result["slippage_rate"] == 0.0
     assert result["position"] == [True, False, False]
     assert result["trade_count"] == 1
     assert result["periods_in_position"] == 1
@@ -73,10 +85,75 @@ def test_simulate_returns_expected_result_fields() -> None:
     assert result["final_value"] == 1100.0
 
 
+def test_simulate_applies_entry_cost_before_return() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": 0.1,
+        "slippage_rate": 0.0,
+        "returns": [0.1],
+        "entry_signals": [True],
+        "exit_signals": [False],
+    }
+
+    result = simulate(config)
+
+    assert result["position"] == [True]
+    assert result["trade_count"] == 1
+    assert result["periods_in_position"] == 1
+    assert result["equity_curve"] == pytest.approx([1000.0, 990.0])
+    assert result["final_value"] == pytest.approx(990.0)
+    assert result["final_value"] == pytest.approx(result["equity_curve"][-1])
+
+
+def test_simulate_applies_exit_cost_when_closing_position() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": 0.1,
+        "slippage_rate": 0.0,
+        "returns": [0.1, 0.05],
+        "entry_signals": [True, False],
+        "exit_signals": [False, True],
+    }
+
+    result = simulate(config)
+
+    assert result["position"] == [True, False]
+    assert result["trade_count"] == 1
+    assert result["periods_in_position"] == 1
+    assert result["equity_curve"] == pytest.approx([1000.0, 990.0, 891.0])
+    assert result["final_value"] == pytest.approx(891.0)
+    assert result["final_value"] == pytest.approx(result["equity_curve"][-1])
+
+
+def test_simulate_applies_entry_and_exit_costs_with_slippage() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": 0.01,
+        "slippage_rate": 0.02,
+        "returns": [0.1, 0.05],
+        "entry_signals": [True, False],
+        "exit_signals": [False, True],
+    }
+
+    result = simulate(config)
+
+    assert result["position"] == [True, False]
+    assert result["trade_count"] == 1
+    assert result["periods_in_position"] == 1
+    assert result["equity_curve"] == [1000.0, 1067.0, 1034.99]
+    assert result["final_value"] == 1034.99
+    assert result["final_value"] == result["equity_curve"][-1]
+
+
 def test_simulate_counts_multiple_entries_as_multiple_trades() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
         "returns": [0.1, -0.05, 0.02, 0.03, -0.01],
         "entry_signals": [True, False, False, True, False],
         "exit_signals": [False, True, False, False, False],
@@ -97,6 +174,8 @@ def test_simulate_raises_when_returns_and_entry_signals_lengths_differ() -> None
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
         "returns": [0.1, -0.05],
         "entry_signals": [True],
         "exit_signals": [False, False],
@@ -110,6 +189,8 @@ def test_simulate_raises_when_returns_and_exit_signals_lengths_differ() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
         "returns": [0.1, -0.05],
         "entry_signals": [True, False],
         "exit_signals": [False],
@@ -123,6 +204,8 @@ def test_simulate_raises_when_entry_and_exit_signals_lengths_differ() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
         "returns": [0.1, -0.05],
         "entry_signals": [True],
         "exit_signals": [False, False, True],
@@ -132,10 +215,42 @@ def test_simulate_raises_when_entry_and_exit_signals_lengths_differ() -> None:
         simulate(config)
 
 
+def test_simulate_raises_when_fee_rate_is_negative() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": -0.01,
+        "slippage_rate": 0.0,
+        "returns": [0.1],
+        "entry_signals": [True],
+        "exit_signals": [False],
+    }
+
+    with pytest.raises(ValueError, match="fee_rate must be non-negative"):
+        simulate(config)
+
+
+def test_simulate_raises_when_slippage_rate_is_negative() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": -0.01,
+        "returns": [0.1],
+        "entry_signals": [True],
+        "exit_signals": [False],
+    }
+
+    with pytest.raises(ValueError, match="slippage_rate must be non-negative"):
+        simulate(config)
+
+
 def test_simulate_returns_initial_cash_only_for_empty_returns() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.1,
+        "slippage_rate": 0.2,
         "returns": [],
         "entry_signals": [],
         "exit_signals": [],
@@ -155,6 +270,8 @@ def test_simulate_keeps_equity_flat_when_never_in_position() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.1,
+        "slippage_rate": 0.2,
         "returns": [0.1, -0.05, 0.02],
         "entry_signals": [False, False, False],
         "exit_signals": [False, False, False],
@@ -173,6 +290,8 @@ def test_simulate_applies_all_returns_when_always_in_position() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
         "returns": [0.1, -0.05, 0.02],
         "entry_signals": [True, False, False],
         "exit_signals": [False, False, False],
@@ -187,10 +306,66 @@ def test_simulate_applies_all_returns_when_always_in_position() -> None:
     assert result["final_value"] == 1065.9
 
 
+def test_simulate_applies_only_entry_cost_when_position_never_exits() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": 0.01,
+        "slippage_rate": 0.02,
+        "returns": [0.1, 0.05],
+        "entry_signals": [True, False],
+        "exit_signals": [False, False],
+    }
+
+    result = simulate(config)
+
+    assert result["position"] == [True, True]
+    assert result["trade_count"] == 1
+    assert result["periods_in_position"] == 2
+    assert result["equity_curve"] == pytest.approx([1000.0, 1067.0, 1120.35])
+    assert result["final_value"] == pytest.approx(1120.35)
+
+
+def test_simulate_supports_zero_fee_with_nonzero_slippage() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.01,
+        "returns": [0.1],
+        "entry_signals": [True],
+        "exit_signals": [False],
+    }
+
+    result = simulate(config)
+
+    assert result["equity_curve"] == [1000.0, 1089.0]
+    assert result["final_value"] == 1089.0
+
+
+def test_simulate_supports_zero_slippage_with_nonzero_fee() -> None:
+    config = {
+        "simulation_name": "test",
+        "initial_cash": 1000,
+        "fee_rate": 0.01,
+        "slippage_rate": 0.0,
+        "returns": [0.1],
+        "entry_signals": [True],
+        "exit_signals": [False],
+    }
+
+    result = simulate(config)
+
+    assert result["equity_curve"] == [1000.0, 1089.0]
+    assert result["final_value"] == 1089.0
+
+
 def test_simulate_exit_wins_when_entry_and_exit_are_both_true() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
         "returns": [0.1, 0.05],
         "entry_signals": [True, True],
         "exit_signals": [False, True],
@@ -209,6 +384,8 @@ def test_simulate_same_period_entry_and_exit_results_in_no_position() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
+        "fee_rate": 0.1,
+        "slippage_rate": 0.2,
         "returns": [0.1],
         "entry_signals": [True],
         "exit_signals": [True],
