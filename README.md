@@ -49,11 +49,50 @@ source .venv/bin/activate
 python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json
 ```
 
+複数銘柄データ設定の要約確認:
+
+```bash
+source .venv/bin/activate
+python3 scripts/summarize_market_data.py --config config/real_data_comparison.example.json
+```
+
 リアルタイム判定ランナーの最小実行例:
 
 ```bash
 source .venv/bin/activate
 python3 scripts/run_live_decision_runner.py --config config/live_decision_runner.example.json
+```
+
+SNS signal 入力の要約確認:
+
+```bash
+source .venv/bin/activate
+python3 scripts/summarize_sns_signals.py --input data/signals/sns/sample.json
+```
+
+News signal 入力の要約確認:
+
+```bash
+source .venv/bin/activate
+python3 scripts/summarize_news_signals.py --input data/signals/news/sample.json
+```
+
+無料ニュースソースの最小収集例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_news_collector.py --config config/news_collector.example.json
+python3 scripts/run_news_collector.py --config config/news_collector.sec.example.json
+python3 scripts/run_news_collector.py --config config/news_collector.federal_reserve.example.json
+```
+
+無料 SNS ソースの最小収集例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_sns_collector.py --config config/sns_collector.reddit.example.json
+python3 scripts/run_sns_collector.py --config config/sns_collector.youtube.example.json
+python3 scripts/run_sns_collector.py --config config/sns_collector.hacker_news.example.json
 ```
 
 `Makefile` を使う場合:
@@ -137,8 +176,10 @@ comparison summary では、既存の `final_value` / `trade_count` / `win_rate`
 returns は close-to-close 定義で計算し、各 return はひとつ前の close から当該 timestamp の close までの変化率です。
 生成された returns の timestamp は後ろ側の close timestamp に揃えます。
 
-現在の最小構成では `BTC/USDT` のローカルサンプル OHLCV を [data/btcusdt_1h_sample.csv](/home/kuru0101/crypto_simulator/crypto_simulator/data/btcusdt_1h_sample.csv) に同梱しています。
+複数銘柄の価格データ土台では `data_sources.default_symbol` と `data_sources.symbols` を使い、ローカル配置は `data/market/<symbol_slug>/...csv` を標準例とします。
+現在の最小構成では `BTC/USDT` と `ETH/USDT` のローカルサンプル OHLCV を [data/market/btcusdt/1h_sample.csv](/home/kuru0101/crypto_simulator/crypto_simulator/data/market/btcusdt/1h_sample.csv) と [data/market/ethusdt/1h_sample.csv](/home/kuru0101/crypto_simulator/crypto_simulator/data/market/ethusdt/1h_sample.csv) に同梱しています。
 実データ comparison 用の設定例は [config/real_data_comparison.example.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/real_data_comparison.example.json) です。
+comparison は `--symbol` で対象銘柄を切り替えられます。
 
 ## 疑似リアルタイム再生
 
@@ -147,6 +188,7 @@ returns は close-to-close 定義で計算し、各 return はひとつ前の cl
 
 `warmup_rows` は、起動直後に売買判断をせずデータ取得だけを行う行数です。
 判断開始後も warmup 中の履歴は strategy 計算の文脈として使えますが、warmup 対象期間の signal は無効化して、warmup 中に売買が始まらないようにしています。
+複数銘柄設定では `replay.work_dir` から `<symbol_slug>_replay_work.csv` を導出し、`--symbol` で再生対象を切り替えられます。
 
 decision log の理由コードは以下の2系統に分けます。
 
@@ -176,6 +218,39 @@ progress summary の `trade_count` は live session 中に新規発生した tra
 
 標準出力の full history 抑制方針は維持し、詳細は run directory 配下の JSON ファイルで確認します。
 429 受信時は最小限の retry / backoff を行い、`X-MBX-USED-WEIGHT-1M` が返る場合は decision / progress 文脈と summary に残します。
+複数銘柄設定では `data_sources.default_symbol` と `data_sources.symbols[]` を使い、`--symbol ETHUSDT` のように対象銘柄を切り替えられます。summary には `symbol` / `default_symbol` / `available_symbols` を残し、progress stdout にも `symbol` を含めます。
+
+## External Signal Inputs
+
+SNS / News は今回 `simulate` に直結せず、分析済みシグナルの受け取り口だけを追加しています。
+保存形式は JSON array または NDJSON、時刻は timezone 付き ISO8601 を受けて UTC `Z` に正規化します。
+
+SNS は `source` / `timestamp` / `mention_count` / `positive_score` / `negative_score` / `neutral_score` / `activity_score` / `anomaly_score` と、`symbol` または `topic` を持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_topic` を返し、topic-only データも保持できます。
+
+News は `source` / `published_at` / `headline` / `relevance_score` / `sentiment_score` / `impact_score` / `category` と、`url` または `source_id`、さらに `symbol` / `asset` / `topic` のいずれかを持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_asset` / `by_topic` を返します。
+
+最小 news collector は `coindesk_rss`、`sec_press_releases_rss`、`federal_reserve_press_releases_rss` をサポートし、いずれも RSS GET のみを行います。source ごとの adapter は collector 本体から分離し、保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/news_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `category_distribution` と `duplicate_count` を含む観測を残します。
+
+最小 SNS collector は `reddit_subreddit_new_json` をサポートし、Reddit の公開 listing JSON を GET して `sns_signals` schema に正規化します。保存は raw ではなく正規化済み `normalized.json` と run 単位の `summary.json` のみで、出力先は `var/sns_signals/<collector_source>/<run_id>/` です。record には軽量 dedup 用の `dedup_key` を持たせ、summary では `mention_count_summary` と `duplicate_count` を含む観測を残します。
+
+YouTube 側の最小 collector は `youtube_channel_rss` をサポートし、複数 channel の公開 RSS を 1 run に束ねて `sns_signals` schema に正規化します。config では `groups[]` に `group_id` / `group_label` / `group_theme` / `publisher_type` / `channels[]` を持たせ、channel 単位では `channel_id` / `channel_label` / `publisher_type` / `theme_tags` を管理します。record の group/channel 情報は `metadata` に残し、summary では `group_distribution` / `group_theme_distribution` / `publisher_type_distribution` / `channel_distribution` を観測できます。
+
+Hacker News 側の最小 collector は `hacker_news_public_api` をサポートし、`topstories` などの一覧 ID を取得してから `item/{id}` を最小件数だけ引き、1件 = 1 signal で正規化します。record には `score` / `descendants` / `story_type` / `url` / `id` を `metadata` に残し、summary では `score_summary` / `comment_count_summary` / `story_type_distribution` を観測できます。
+
+SNS summary は、共通項目をトップレベルに維持しつつ、source 固有観測を `source_specific` にもまとめます。`mention_count` の意味は source ごとに異なり、Reddit は `num_comments`、YouTube は `1動画=1`、Hacker News は `descendants` を使います。topic / symbol 推定ルールは共通 normalize ではなく source ごとの adapter 側に寄せています。
+
+サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
+設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。
+
+ニュース collector の最小接続では CoinDesk RSS を 1 ソースだけ対象にし、`collector -> adapter -> save -> observe` を分離しています。raw RSS は保存せず、正規化後の bundle と観測 summary だけを `var/news_signals/<source>/<run_id>/` に保存します。
+
+統合観測導線として `python3 scripts/observe_external_signals.py` を追加し、保存済み `var/news_signals/**/summary.json` と `var/sns_signals/**/summary.json` を横断して読めるようにしました。これは読み取り専用で、外部再取得も `simulate` 連携も行いません。
+
+既定の `condensed` 表示では collector ごとの最新状況を一覧でき、`--group-by overall|signal_type|source`、`--signal-type news|sns`、`--source <collector_source>`、`--latest-only` で見方を切り替えられます。`--format verbose` では `source_specific` と topic / symbol 分布の詳細、`--format json` では集約結果全体を JSON で確認できます。
+
+統合観測が見る共通項目は `signal_type` / `source` / `run_id` / `started_at` / `ended_at` / `status` / `fetched_item_count` / `normalized_success_count` / `validation_failure_count` / `saved_record_count` / `duplicate_count` / `warnings` / `errors` / `saved_paths` です。`source_specific` は無理に共通化せず、存在有無を一覧に出したうえで verbose 時だけ分けて表示します。
+
+`summary.json` が欠損している run directory や、JSON として壊れている summary も観測結果に残します。今の制約は、集約対象が保存済み summary 中心であること、source ごとの差分は `source_specific` に残したまま最小限しか吸収しないこと、topic / symbol 分布は summary 側の既存集計に依存することです。
 
 ## ディレクトリ方針
 

@@ -1,10 +1,19 @@
 {
-  "data_source": {
-    "symbol": "BTC/USDT",
-    "ohlcv_csv_path": "data/btcusdt_1h_sample.csv"
+  "data_sources": {
+    "default_symbol": "BTC/USDT",
+    "symbols": [
+      {
+        "symbol": "BTC/USDT",
+        "ohlcv_csv_path": "data/market/btcusdt/1h_sample.csv"
+      },
+      {
+        "symbol": "ETH/USDT",
+        "ohlcv_csv_path": "data/market/ethusdt/1h_sample.csv"
+      }
+    ]
   },
   "replay": {
-    "work_csv_path": "var/btcusdt_1h_replay_work.csv",
+    "work_dir": "var/replay",
     "warmup_rows": 3,
     "mode": "fast",
     "tick_interval_seconds": 0.0,

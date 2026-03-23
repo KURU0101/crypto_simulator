@@ -1,0 +1,67 @@
+{
+  "collector": {
+    "source": "youtube_channel_rss",
+    "timeout_seconds": 30,
+    "max_items": 10,
+    "groups": [
+      {
+        "group_id": "crypto_investing_finance",
+        "group_label": "Crypto / Investing / Finance",
+        "group_theme": "crypto and financial markets",
+        "publisher_type": "mixed",
+        "channels": [
+          {"channel_id": "UCqK_GSMbpiV8spgD3ZGloSw", "channel_label": "Coin Bureau", "publisher_type": "media", "theme_tags": ["crypto markets", "bitcoin", "ethereum"]},
+          {"channel_id": "UC7TghOL755nBk7HelHoi9LQ", "channel_label": "CoinDesk", "publisher_type": "media", "theme_tags": ["crypto news", "digital assets", "policy"]},
+          {"channel_id": "UCofTOFX4QuhT8OY-3-fFRFw", "channel_label": "Coinbase", "publisher_type": "exchange", "theme_tags": ["crypto exchange", "onchain", "market structure"]},
+          {"channel_id": "UCszKgjeaXadyl9-TtcjSxDQ", "channel_label": "Kraken", "publisher_type": "exchange", "theme_tags": ["crypto exchange", "market access", "trading"]},
+          {"channel_id": "UCIALMKvObZNtJ6AmdCLP7Lg", "channel_label": "Bloomberg Television", "publisher_type": "media", "theme_tags": ["macro", "markets", "finance"]},
+          {"channel_id": "UCrp_UI8XtuYfpiqluWLD7Lw", "channel_label": "CNBC Television", "publisher_type": "media", "theme_tags": ["markets", "business", "macro"]},
+          {"channel_id": "UCEAZeUIeJs0IjQiqTCdVSIg", "channel_label": "Yahoo Finance", "publisher_type": "media", "theme_tags": ["markets", "investing", "financial news"]},
+          {"channel_id": "UC61MWzrpcsazp23LOxCsTcg", "channel_label": "BlackRock", "publisher_type": "asset_manager", "theme_tags": ["asset management", "etf", "capital markets"]},
+          {"channel_id": "UCwp9GbPASoPs6BIxVWm_-2A", "channel_label": "Fidelity Investments", "publisher_type": "asset_manager", "theme_tags": ["wealth", "investing", "retail finance"]},
+          {"channel_id": "UCLC4PuFlyKwK03Sc29YLEGQ", "channel_label": "CME Group", "publisher_type": "market_infrastructure", "theme_tags": ["derivatives", "futures", "institutional markets"]}
+        ]
+      },
+      {
+        "group_id": "public_institutions",
+        "group_label": "Public Institutions",
+        "group_theme": "public policy, regulation, and research",
+        "publisher_type": "mixed",
+        "channels": [
+          {"channel_id": "UCfJAI9RouQRkjHCdXTABbJg", "channel_label": "Federal Reserve Board", "publisher_type": "government", "theme_tags": ["monetary policy", "banking", "regulation"]},
+          {"channel_id": "UCxMLpJP0dIBw9e813k9Mpxw", "channel_label": "SEC Video", "publisher_type": "regulator", "theme_tags": ["securities regulation", "markets", "enforcement"]},
+          {"channel_id": "UCbtnGVKRiRHU5NOUgbgyU0Q", "channel_label": "SEC News", "publisher_type": "regulator", "theme_tags": ["securities regulation", "rulemaking", "policy"]},
+          {"channel_id": "UC_aP7p621ATY_yAa8jMqUVA", "channel_label": "NASA", "publisher_type": "government", "theme_tags": ["space technology", "research", "engineering"]},
+          {"channel_id": "UCelItQpbih_hBrNSA5cRZyw", "channel_label": "NIST", "publisher_type": "government", "theme_tags": ["standards", "cybersecurity", "measurement science"]},
+          {"channel_id": "UCYxRlFDqcWM4y7FfpiAN3KQ", "channel_label": "The White House", "publisher_type": "government", "theme_tags": ["federal policy", "administration", "public briefings"]},
+          {"channel_id": "UCFe-pfe0a9bDvWy74Jd7vFg", "channel_label": "MIT", "publisher_type": "university", "theme_tags": ["research", "technology", "innovation"]},
+          {"channel_id": "UC-EnprmCZ3OXyAoG7vjVNCA", "channel_label": "Stanford", "publisher_type": "university", "theme_tags": ["research", "entrepreneurship", "technology"]},
+          {"channel_id": "UCwbsWIWfcOL2FiUZ2hKNJHQ", "channel_label": "UC Berkeley", "publisher_type": "university", "theme_tags": ["research", "public policy", "engineering"]},
+          {"channel_id": "UCK8f1CUe8y403u3b0gCINww", "channel_label": "Oxford University", "publisher_type": "university", "theme_tags": ["research", "science", "public policy"]}
+        ]
+      },
+      {
+        "group_id": "enterprises",
+        "group_label": "Enterprises",
+        "group_theme": "enterprise technology and infrastructure",
+        "publisher_type": "mixed",
+        "channels": [
+          {"channel_id": "UCJS9pqu9BzkAMNTmzNMNhvg", "channel_label": "Google Cloud Tech", "publisher_type": "large_enterprise", "theme_tags": ["cloud", "enterprise ai", "data platforms"]},
+          {"channel_id": "UCsMica-v34Irf9KVTh6xx-g", "channel_label": "Microsoft Developer", "publisher_type": "large_enterprise", "theme_tags": ["developer platforms", "cloud", "ai tooling"]},
+          {"channel_id": "UC_x5XG1OV2P6uZZ5FSM9Ttw", "channel_label": "Google for Developers", "publisher_type": "large_enterprise", "theme_tags": ["developer ecosystem", "platforms", "ai"]},
+          {"channel_id": "UCd6MoB9NC6uYN2grvUNT-Zg", "channel_label": "Amazon Web Services", "publisher_type": "large_enterprise", "theme_tags": ["cloud", "infrastructure", "enterprise software"]},
+          {"channel_id": "UC0m-80FnNY2Qb7obvTL_2fA", "channel_label": "Microsoft Azure", "publisher_type": "large_enterprise", "theme_tags": ["cloud", "enterprise ai", "infrastructure"]},
+          {"channel_id": "UCHuiy8bXnmK5nisYHUd1J5g", "channel_label": "NVIDIA", "publisher_type": "large_enterprise", "theme_tags": ["accelerated computing", "ai", "chips"]},
+          {"channel_id": "UCxaFxSe1Xi3BSDJVzSvxf_w", "channel_label": "Databricks", "publisher_type": "startup", "theme_tags": ["data platforms", "enterprise ai", "lakehouse"]},
+          {"channel_id": "UCgv3xMy6kECn0boYP9d2o-g", "channel_label": "Cloudflare", "publisher_type": "startup", "theme_tags": ["internet infrastructure", "security", "developer platform"]},
+          {"channel_id": "UCs10x-muRrTQMJ4Ya-fmIlw", "channel_label": "Snowflake", "publisher_type": "startup", "theme_tags": ["data cloud", "analytics", "enterprise data"]},
+          {"channel_id": "UCM1guA1E-RHLO2OyfQPOkEQ", "channel_label": "Stripe", "publisher_type": "startup", "theme_tags": ["payments", "financial infrastructure", "internet business"]}
+        ]
+      }
+    ]
+  },
+  "output": {
+    "output_dir": "var/sns_signals",
+    "save_run_summary": true
+  }
+}

@@ -1,8 +1,18 @@
 {
-  "data_source": {
-    "symbol": "BTCUSDT",
-    "interval": "1m",
-    "limit": 120
+  "data_sources": {
+    "default_symbol": "BTCUSDT",
+    "symbols": [
+      {
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "limit": 120
+      },
+      {
+        "symbol": "ETHUSDT",
+        "interval": "1m",
+        "limit": 120
+      }
+    ]
   },
   "runtime": {
     "poll_interval_seconds": 60,

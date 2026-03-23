@@ -68,6 +68,23 @@ def _build_live_config(output_dir: Path) -> dict:
     }
 
 
+def _build_multi_symbol_live_config(output_dir: Path) -> dict:
+    config = _build_live_config(output_dir)
+    data_source = config.pop("data_source")
+    config["data_sources"] = {
+        "default_symbol": "ETHUSDT",
+        "symbols": [
+            data_source,
+            {
+                "symbol": "ETHUSDT",
+                "interval": "1m",
+                "limit": 3,
+            },
+        ],
+    }
+    return config
+
+
 def _kline(minute_index: int, close: str) -> list[object]:
     open_time_ms = minute_index * 60_000
     close_time_ms = open_time_ms + 59_999
@@ -138,6 +155,56 @@ def test_load_live_decision_runner_config_validates_required_sections() -> None:
         )
 
 
+def test_load_live_decision_runner_config_accepts_multi_symbol_data_sources() -> None:
+    config = load_live_decision_runner_config(_build_multi_symbol_live_config(Path("outputs/test")))
+
+    assert config["data_source"]["symbol"] == "ETHUSDT"
+    assert config["data_sources"]["default_symbol"] == "ETHUSDT"
+    assert config["data_sources"]["symbols"] == ["BTCUSDT", "ETHUSDT"]
+
+
+def test_load_live_decision_runner_config_rejects_unknown_default_symbol() -> None:
+    config = _build_multi_symbol_live_config(Path("outputs/test"))
+    config["data_sources"]["default_symbol"] = "SOLUSDT"
+
+    with pytest.raises(ValueError, match="default_symbol must match one of the configured symbols"):
+        load_live_decision_runner_config(config)
+
+
+def test_run_live_decision_runner_allows_symbol_override_for_multi_symbol_config() -> None:
+    clock = FakeClock(start_seconds=250)
+    config = _build_multi_symbol_live_config(Path("outputs/test"))
+    config["runtime"]["duration_seconds"] = 130
+    requested_symbols: list[str] = []
+
+    responses = iter(
+        [
+            _response(_kline(0, "100"), _kline(1, "102"), _kline(2, "99")),
+            _response(_kline(1, "102"), _kline(2, "99"), _kline(3, "101")),
+            _response(_kline(2, "99"), _kline(3, "101"), _kline(4, "103")),
+        ]
+    )
+
+    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
+        requested_symbols.append(symbol)
+        assert interval == "1m"
+        assert limit == 5
+        return next(responses)
+
+    result = run_live_decision_runner(
+        config,
+        symbol="BTCUSDT",
+        fetch_klines_fn=fake_fetch,
+        sleep_fn=clock.sleep,
+        now_fn=clock.now,
+    )
+
+    assert requested_symbols == ["BTCUSDT", "BTCUSDT", "BTCUSDT"]
+    assert result["summary"]["symbol"] == "BTCUSDT"
+    assert result["summary"]["default_symbol"] == "BTCUSDT"
+    assert result["summary"]["available_symbols"] == ["BTCUSDT", "ETHUSDT"]
+
+
 def test_live_decision_runner_waits_for_warmup_before_first_decision() -> None:
     clock = FakeClock(start_seconds=250)
     config = _build_live_config(Path("outputs/test"))
@@ -173,6 +240,7 @@ def test_live_decision_runner_waits_for_warmup_before_first_decision() -> None:
     assert result["decision_log"][1]["ohlcv_timestamp"] == "2024-01-01T00:06:00Z"
 
     parsed_progress = [json.loads(line) for line in progress_lines]
+    assert all(entry["symbol"] == "BTCUSDT" for entry in parsed_progress)
     assert [entry["reason_code"] for entry in parsed_progress] == [
         "warmup_pending",
         "warmup_pending",

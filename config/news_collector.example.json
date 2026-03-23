@@ -1,0 +1,12 @@
+{
+  "collector": {
+    "source": "coindesk_rss",
+    "feed_url": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "timeout_seconds": 30,
+    "max_items": 20
+  },
+  "output": {
+    "output_dir": "var/news_signals",
+    "save_run_summary": true
+  }
+}

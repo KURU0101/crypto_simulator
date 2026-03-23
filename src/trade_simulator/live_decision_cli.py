@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
-    result = run_live_decision_runner(config)
+    result = run_live_decision_runner(config, symbol=args.symbol)
     save_live_decision_runner_result(result, result["output"]["output_dir"])
     print(format_live_decision_stdout(result))
     return 0 if result["summary"]["status"] != "failed" else 1

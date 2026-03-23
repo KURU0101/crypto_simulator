@@ -62,17 +62,46 @@ def test_initialize_work_csv_rejects_same_path(tmp_path: Path) -> None:
 
 
 def test_load_pseudo_realtime_config_validates_required_sections() -> None:
-    with pytest.raises(ValueError, match="pseudo-realtime config must include a data_source dict"):
+    with pytest.raises(ValueError, match="pseudo-realtime config must include a data_source dict or data_sources dict"):
         load_pseudo_realtime_config({"replay": {}, "strategy": {}})
 
     with pytest.raises(ValueError, match="replay must include warmup_rows"):
         load_pseudo_realtime_config(
             {
-                "data_source": {"ohlcv_csv_path": "data.csv"},
+                "data_source": {"symbol": "BTC/USDT", "ohlcv_csv_path": "data.csv"},
                 "replay": {"work_csv_path": "work.csv"},
                 "strategy": {"initial_cash": 1000},
             }
         )
+
+
+def test_load_pseudo_realtime_config_builds_symbol_specific_work_csv_path() -> None:
+    config = load_pseudo_realtime_config(
+        {
+            "data_sources": {
+                "default_symbol": "ETH/USDT",
+                "symbols": [
+                    {
+                        "symbol": "BTC/USDT",
+                        "ohlcv_csv_path": "data/market/btcusdt/1h_sample.csv",
+                    },
+                    {
+                        "symbol": "ETH/USDT",
+                        "ohlcv_csv_path": "data/market/ethusdt/1h_sample.csv",
+                    },
+                ],
+            },
+            "replay": {
+                "work_dir": "var/replay",
+                "warmup_rows": 2,
+            },
+            "strategy": {"initial_cash": 1000},
+        }
+    )
+
+    assert config["data_source"]["symbol"] == "ETH/USDT"
+    assert config["replay"]["work_csv_path"] == "var/replay/ethusdt_replay_work.csv"
+    assert config["replay"]["available_symbols"] == ["BTC/USDT", "ETH/USDT"]
 
 
 def test_pseudo_realtime_replay_appends_rows_and_emits_logs(tmp_path: Path) -> None:
@@ -206,11 +235,11 @@ def test_pseudo_realtime_cli_main_prints_json(tmp_path: Path, capsys: pytest.Cap
     config = _build_config(source_csv_path, work_csv_path)
     config_path.write_text(
         Path("config/pseudo_realtime_replay.example.json").read_text(encoding="utf-8").replace(
-            "data/btcusdt_1h_sample.csv",
+            "data/market/btcusdt/1h_sample.csv",
             str(source_csv_path),
         ).replace(
-            "var/btcusdt_1h_replay_work.csv",
-            str(work_csv_path),
+            '"work_dir": "var/replay"',
+            f'"work_csv_path": "{work_csv_path}"',
         ),
         encoding="utf-8",
     )

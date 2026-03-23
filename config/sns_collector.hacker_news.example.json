@@ -1,0 +1,14 @@
+{
+  "collector": {
+    "source": "hacker_news_public_api",
+    "story_list": "topstories",
+    "list_url": "https://hacker-news.firebaseio.com/v0/topstories.json",
+    "item_url_template": "https://hacker-news.firebaseio.com/v0/item/{item_id}.json",
+    "timeout_seconds": 30,
+    "max_items": 20
+  },
+  "output": {
+    "output_dir": "var/sns_signals",
+    "save_run_summary": true
+  }
+}
