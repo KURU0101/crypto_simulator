@@ -77,6 +77,13 @@ source .venv/bin/activate
 python3 scripts/summarize_news_signals.py --input data/signals/news/sample.json
 ```
 
+無料ニュースソース1本の最小収集例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_news_collector.py --config config/news_collector.example.json
+```
+
 `Makefile` を使う場合:
 
 ```bash
@@ -213,6 +220,8 @@ News は `source` / `published_at` / `headline` / `relevance_score` / `sentiment
 
 サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
 設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。
+
+ニュース collector の最小接続では CoinDesk RSS を 1 ソースだけ対象にし、`collector -> adapter -> save -> observe` を分離しています。raw RSS は保存せず、正規化後の bundle と観測 summary だけを `var/news_signals/<source>/<run_id>/` に保存します。
 
 ## ディレクトリ方針
 

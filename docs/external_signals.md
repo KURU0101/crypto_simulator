@@ -95,3 +95,25 @@ News 候補:
 - SEC / FRB / CFTC / 日銀などの公式発表ページ
 
 最初の接続先としては、RSS や公開 JSON を持つ News ソースが最も軽く、次に Reddit の手動・定期集計が妥当です。今回の形式には、取得後に source ごとの生項目を `metadata` に残しつつ、本文側は `source` / `symbol|topic` / `time` / score 群へ写像して流し込みます。
+
+## Minimal News Collector
+
+初回 collector は CoinDesk RSS を 1 ソースだけ対象にします。利用は公開 RSS の GET のみで、raw XML は保存しません。
+
+責務分離:
+
+- collector: RSS GET と XML item 抽出
+- adapter: item を `news_signals` schema へ正規化
+- save: 正規化後 bundle と観測 summary のみ保存
+- observe: 実行時間、取得件数、正規化成功/失敗、保存件数、欠損、symbol/topic 分布、published_at 分布、エラーを集計
+
+実行:
+
+- `python3 scripts/run_news_collector.py --config config/news_collector.example.json`
+
+保存:
+
+- `var/news_signals/coindesk_rss/<run_id>/normalized.json`
+- `var/news_signals/coindesk_rss/<run_id>/summary.json`
+
+adapter の score は今回は収集導線確認用の固定/簡易ヒューリスティクスです。高度な sentiment や impact 推定は次段に分離します。

@@ -19,3 +19,4 @@ live runner は起動直後には判断せず、warmup 完了後に初回判断�
 warmup は観測専用で、trade / pnl / position を作りません。live runner の summary と progress は warmup 後の live session だけを対象にし、`session_start_state` は常に `initial_cash` ベースのフラット初期状態です。
 リアルタイム判定ランナーは `python3 scripts/run_live_decision_runner.py --config config/live_decision_runner.example.json` で確認できます。複数銘柄設定時は `--symbol ETHUSDT` のように対象を切り替えられます。
 SNS / News の入口サンプルは `data/signals/` 配下に置き、`python3 scripts/summarize_sns_signals.py --input data/signals/sns/sample.json`、`python3 scripts/summarize_news_signals.py --input data/signals/news/sample.json` で validation と要約を確認できます。詳細な schema と保存方針は `docs/external_signals.md` を参照してください。
+`news_collector.example.json` は CoinDesk RSS を 1 ソースだけ取得し、正規化済みニュース signal と観測 summary を `var/news_signals/<source>/<run_id>/` に保存する最小構成です。実行は `python3 scripts/run_news_collector.py --config config/news_collector.example.json` です。
