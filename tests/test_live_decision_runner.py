@@ -418,3 +418,109 @@ def test_live_decision_runner_progress_summary_defaults_when_no_decision_data_ye
     assert progress["equity"] == 1000.0
     assert progress["cash"] == 1000.0
     assert progress["reason_code"] == "warmup_pending"
+
+
+def test_live_decision_runner_summary_is_session_scoped_when_context_has_historical_trade() -> None:
+    clock = FakeClock(start_seconds=250)
+    config = _build_live_config(Path("outputs/test"))
+    config["runtime"]["duration_seconds"] = 130
+    progress_lines: list[str] = []
+    responses = iter(
+        [
+            _response(_kline(0, "100"), _kline(1, "102"), _kline(2, "99"), _kline(3, "100"), _kline(4, "100")),
+            _response(_kline(1, "102"), _kline(2, "99"), _kline(3, "100"), _kline(4, "100"), _kline(5, "100")),
+            _response(_kline(2, "99"), _kline(3, "100"), _kline(4, "100"), _kline(5, "100"), _kline(6, "100")),
+        ]
+    )
+
+    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
+        return next(responses)
+
+    result = run_live_decision_runner(
+        config,
+        fetch_klines_fn=fake_fetch,
+        sleep_fn=clock.sleep,
+        now_fn=clock.now,
+        print_fn=_collecting_printer(progress_lines),
+    )
+
+    assert len(result["decision_log"]) == 1
+    assert result["decision_log"][0]["signal_reason_code"] == "no_signal"
+    assert result["decision_log"][0]["action_reason_code"] == "stay_flat"
+    assert result["summary"]["trade_count"] == 0
+    assert result["summary"]["winning_trades"] == 0
+    assert result["summary"]["losing_trades"] == 0
+    assert result["summary"]["realized_pnl_total"] == 0.0
+    assert result["summary"]["session_value_change"] == 0.0
+    assert result["summary"]["session_start_state"]["trade_count"] == 1
+    assert result["summary"]["session_end_state"]["total_trade_count"] == 1
+    assert result["trade_log"] == []
+
+    final_progress = json.loads(progress_lines[-1])
+    assert final_progress["trade_count"] == 0
+
+
+def test_live_decision_runner_summary_and_trade_log_align_when_session_creates_trade() -> None:
+    clock = FakeClock(start_seconds=250)
+    config = _build_live_config(Path("outputs/test"))
+    progress_lines: list[str] = []
+    responses = iter(
+        [
+            _response(_kline(0, "100"), _kline(1, "100"), _kline(2, "100"), _kline(3, "100"), _kline(4, "100")),
+            _response(_kline(1, "100"), _kline(2, "100"), _kline(3, "100"), _kline(4, "100"), _kline(5, "102")),
+            _response(_kline(2, "100"), _kline(3, "100"), _kline(4, "100"), _kline(5, "102"), _kline(6, "99")),
+            _response(_kline(3, "100"), _kline(4, "100"), _kline(5, "102"), _kline(6, "99"), _kline(7, "99")),
+        ]
+    )
+
+    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
+        return next(responses)
+
+    result = run_live_decision_runner(
+        config,
+        fetch_klines_fn=fake_fetch,
+        sleep_fn=clock.sleep,
+        now_fn=clock.now,
+        print_fn=_collecting_printer(progress_lines),
+    )
+
+    assert [entry["action_reason_code"] for entry in result["decision_log"]] == ["enter_position", "exit_position"]
+    assert result["summary"]["trade_count"] == 1
+    assert result["summary"]["winning_trades"] == 1
+    assert result["summary"]["realized_pnl_total"] > 0
+    assert result["summary"]["session_end_state"]["total_trade_count"] == 1
+    assert len(result["trade_log"]) == 1
+    assert result["trade_log"][0]["entered_during_session"] is True
+    assert result["trade_log"][0]["exited_during_session"] is True
+    assert result["trade_log"][0]["entry_return_timestamp"] == "2024-01-01T00:05:00Z"
+    assert result["trade_log"][0]["exit_return_timestamp"] == "2024-01-01T00:06:00Z"
+
+
+def test_live_decision_runner_summary_handles_open_position_at_session_end() -> None:
+    clock = FakeClock(start_seconds=250)
+    config = _build_live_config(Path("outputs/test"))
+    config["runtime"]["duration_seconds"] = 130
+    responses = iter(
+        [
+            _response(_kline(0, "100"), _kline(1, "100"), _kline(2, "100"), _kline(3, "100"), _kline(4, "100")),
+            _response(_kline(1, "100"), _kline(2, "100"), _kline(3, "100"), _kline(4, "100"), _kline(5, "102")),
+            _response(_kline(2, "100"), _kline(3, "100"), _kline(4, "100"), _kline(5, "102"), _kline(6, "102")),
+        ]
+    )
+
+    def fake_fetch(symbol: str, interval: str, limit: int) -> dict:
+        return next(responses)
+
+    result = run_live_decision_runner(
+        config,
+        fetch_klines_fn=fake_fetch,
+        sleep_fn=clock.sleep,
+        now_fn=clock.now,
+        print_fn=lambda _: None,
+    )
+
+    assert result["summary"]["trade_count"] == 1
+    assert result["summary"]["session_started_with_open_position"] is False
+    assert result["summary"]["open_position_at_end"] is True
+    assert len(result["trade_log"]) == 1
+    assert result["trade_log"][0]["active_at_session_end"] is True

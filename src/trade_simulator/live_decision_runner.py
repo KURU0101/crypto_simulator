@@ -351,29 +351,168 @@ def _derive_cash_value(latest_result: dict | None, initial_cash: float) -> float
     return float(latest_result["final_value"])
 
 
+def _derive_session_metric_delta(
+    latest_result: dict | None,
+    session_start_result: dict | None,
+    key: str,
+) -> float:
+    if latest_result is None:
+        return 0.0
+    baseline_value = 0.0
+    if session_start_result is not None:
+        baseline_value = float(session_start_result[key])
+    return float(latest_result[key]) - baseline_value
+
+
+def _derive_session_trade_count(latest_result: dict | None, session_start_result: dict | None) -> int:
+    return int(_derive_session_metric_delta(latest_result, session_start_result, "trade_count"))
+
+
+def _derive_session_start_state(
+    *,
+    initial_cash: float,
+    session_start_result: dict | None,
+) -> dict:
+    if session_start_result is None:
+        return {
+            "equity": initial_cash,
+            "cash": initial_cash,
+            "trade_count": 0,
+            "realized_pnl_total": 0.0,
+            "open_position": False,
+        }
+
+    return {
+        "equity": float(session_start_result["final_value"]),
+        "cash": _derive_cash_value(session_start_result, initial_cash),
+        "trade_count": int(session_start_result["trade_count"]),
+        "realized_pnl_total": float(session_start_result["realized_pnl_total"]),
+        "open_position": bool(session_start_result["position"] and session_start_result["position"][-1]),
+    }
+
+
+def _derive_session_end_state(
+    *,
+    initial_cash: float,
+    latest_result: dict | None,
+    session_start_result: dict | None,
+) -> dict:
+    current_result = latest_result if latest_result is not None else session_start_result
+    if current_result is None:
+        return {
+            "equity": initial_cash,
+            "cash": initial_cash,
+            "total_trade_count": 0,
+            "total_realized_pnl_total": 0.0,
+            "open_position": False,
+        }
+
+    return {
+        "equity": float(current_result["final_value"]),
+        "cash": _derive_cash_value(current_result, initial_cash),
+        "total_trade_count": int(current_result["trade_count"]),
+        "total_realized_pnl_total": float(current_result["realized_pnl_total"]),
+        "open_position": bool(current_result["position"] and current_result["position"][-1]),
+    }
+
+
+def _derive_session_result_summary(
+    *,
+    initial_cash: float,
+    latest_result: dict | None,
+    session_start_result: dict | None,
+) -> dict:
+    session_start_state = _derive_session_start_state(
+        initial_cash=initial_cash,
+        session_start_result=session_start_result,
+    )
+    session_end_state = _derive_session_end_state(
+        initial_cash=initial_cash,
+        latest_result=latest_result,
+        session_start_result=session_start_result,
+    )
+
+    return {
+        "trade_count": _derive_session_trade_count(latest_result, session_start_result),
+        "winning_trades": int(_derive_session_metric_delta(latest_result, session_start_result, "winning_trades")),
+        "losing_trades": int(_derive_session_metric_delta(latest_result, session_start_result, "losing_trades")),
+        "realized_pnl_total": _derive_session_metric_delta(latest_result, session_start_result, "realized_pnl_total"),
+        "value_change": session_end_state["equity"] - session_start_state["equity"],
+        "started_with_open_position": session_start_state["open_position"],
+        "open_position_at_end": session_end_state["open_position"],
+    }
+
+
+def _build_session_trade_log(
+    *,
+    latest_result: dict | None,
+    return_timestamps: list[str],
+    session_start_return_count: int,
+) -> list[dict]:
+    if latest_result is None:
+        return []
+
+    session_trade_log = []
+    for trade_index, trade in enumerate(latest_result["trade_log"]):
+        entry_index = trade["entry_index"]
+        exit_index = trade["exit_index"]
+        entered_during_session = entry_index >= session_start_return_count
+        exited_during_session = exit_index is not None and exit_index >= session_start_return_count
+        active_at_session_start = entry_index < session_start_return_count and (
+            exit_index is None or exit_index >= session_start_return_count
+        )
+
+        if not (entered_during_session or exited_during_session or active_at_session_start):
+            continue
+
+        session_trade_entry = dict(trade)
+        session_trade_entry["session_trade_index"] = len(session_trade_log)
+        session_trade_entry["entry_return_timestamp"] = return_timestamps[entry_index]
+        session_trade_entry["exit_return_timestamp"] = None
+        if exit_index is not None:
+            session_trade_entry["exit_return_timestamp"] = return_timestamps[exit_index]
+        session_trade_entry["entered_before_session"] = entry_index < session_start_return_count
+        session_trade_entry["entered_during_session"] = entered_during_session
+        session_trade_entry["exited_during_session"] = exited_during_session
+        session_trade_entry["active_at_session_start"] = active_at_session_start
+        session_trade_entry["active_at_session_end"] = exit_index is None
+        session_trade_log.append(session_trade_entry)
+
+    return session_trade_log
+
+
+def _build_strategy_context_result(strategy_config: dict, confirmed_rows: list[dict]) -> tuple[dict | None, int]:
+    if len(confirmed_rows) < 2:
+        return None, 0
+
+    returns_payload = build_close_to_close_returns(confirmed_rows)
+    return _build_strategy_result(strategy_config, returns_payload["returns"]), len(returns_payload["returns"])
+
+
 def build_live_progress_stdout_payload(
     *,
     poll_index: int,
     fetched_at: str,
     latest_result: dict | None,
+    session_start_result: dict | None,
     initial_cash: float,
     reason_code: str,
     last_confirmed_timestamp: str | None,
 ) -> dict:
-    trade_count = 0
-    equity = float(initial_cash)
-    if latest_result is not None:
-        trade_count = int(latest_result["trade_count"])
-        equity = float(latest_result["final_value"])
+    session_end_state = _derive_session_end_state(
+        initial_cash=initial_cash,
+        latest_result=latest_result,
+        session_start_result=session_start_result,
+    )
 
     return {
         "type": "live_progress",
         "poll_index": poll_index,
         "fetched_at": fetched_at,
         "reason_code": reason_code,
-        "trade_count": trade_count,
-        "equity": equity,
-        "cash": _derive_cash_value(latest_result, float(initial_cash)),
+        "trade_count": _derive_session_trade_count(latest_result, session_start_result),
+        "equity": session_end_state["equity"],
+        "cash": session_end_state["cash"],
         "last_confirmed_timestamp": last_confirmed_timestamp,
     }
 
@@ -507,10 +646,13 @@ def _run_fetch_with_retry(
 def _build_runtime_payload(
     *,
     config: dict,
+    confirmed_rows: list[dict],
     decision_log: list[dict],
     equity_history: list[dict],
     progress_log: list[dict],
     latest_result: dict | None,
+    session_start_result: dict | None,
+    session_start_return_count: int,
     status: str,
     stop_reason: str,
     started_at: str,
@@ -524,29 +666,30 @@ def _build_runtime_payload(
     strategy_config = config["strategy"]
     data_source = config["data_source"]
     output = config["output"]
+    initial_cash = float(strategy_config["initial_cash"])
+    session_start_state = _derive_session_start_state(
+        initial_cash=initial_cash,
+        session_start_result=session_start_result,
+    )
+    session_end_state = _derive_session_end_state(
+        initial_cash=initial_cash,
+        latest_result=latest_result,
+        session_start_result=session_start_result,
+    )
+    session_result = _derive_session_result_summary(
+        initial_cash=initial_cash,
+        latest_result=latest_result,
+        session_start_result=session_start_result,
+    )
 
-    trade_log: list[dict] = []
-    if latest_result is not None:
-        trade_log = latest_result["trade_log"]
-
-    final_value = float(strategy_config["initial_cash"])
-    trade_count = 0
-    periods_in_position = 0
-    winning_trades = 0
-    losing_trades = 0
-    realized_pnl_total = 0.0
-    open_position_at_end = False
-
-    if latest_result is not None:
-        final_value = latest_result["final_value"]
-        trade_count = latest_result["trade_count"]
-        periods_in_position = latest_result["periods_in_position"]
-        winning_trades = latest_result["winning_trades"]
-        losing_trades = latest_result["losing_trades"]
-        realized_pnl_total = latest_result["realized_pnl_total"]
-        open_position_at_end = bool(latest_result["position"] and latest_result["position"][-1])
-
-    final_cash = _derive_cash_value(latest_result, float(strategy_config["initial_cash"]))
+    return_timestamps: list[str] = []
+    if len(confirmed_rows) >= 2:
+        return_timestamps = build_close_to_close_returns(confirmed_rows)["return_timestamps"]
+    trade_log = _build_session_trade_log(
+        latest_result=latest_result,
+        return_timestamps=return_timestamps,
+        session_start_return_count=session_start_return_count,
+    )
 
     summary = {
         "simulation_name": strategy_config.get("simulation_name", strategy_config.get("name", "live_decision_runner")),
@@ -577,14 +720,27 @@ def _build_runtime_payload(
         "rate_limit_events": counters["rate_limit_events"],
         "last_confirmed_timestamp": last_confirmed_timestamp,
         "latest_used_weight_1m": counters["latest_used_weight_1m"],
-        "final_value": final_value,
-        "trade_count": trade_count,
-        "periods_in_position": periods_in_position,
-        "winning_trades": winning_trades,
-        "losing_trades": losing_trades,
-        "realized_pnl_total": realized_pnl_total,
-        "open_position_at_end": open_position_at_end,
-        "final_cash": final_cash,
+        "aggregation_scope": {
+            "trade_count": "live_session_only",
+            "winning_trades": "live_session_only",
+            "losing_trades": "live_session_only",
+            "realized_pnl_total": "live_session_only",
+            "final_value": "session_end_absolute_equity",
+            "final_cash": "session_end_absolute_cash",
+            "open_position_at_end": "session_end_absolute_position_state",
+            "trade_log": "trades_with_session_activity_only",
+        },
+        "session_start_state": session_start_state,
+        "session_end_state": session_end_state,
+        "trade_count": session_result["trade_count"],
+        "winning_trades": session_result["winning_trades"],
+        "losing_trades": session_result["losing_trades"],
+        "realized_pnl_total": session_result["realized_pnl_total"],
+        "session_value_change": session_result["value_change"],
+        "session_started_with_open_position": session_result["started_with_open_position"],
+        "final_value": session_end_state["equity"],
+        "final_cash": session_end_state["cash"],
+        "open_position_at_end": session_result["open_position_at_end"],
     }
 
     if run_context is not None:
@@ -651,10 +807,11 @@ def run_live_decision_runner(
     confirmed_rows: list[dict] = []
     last_confirmed_timestamp: str | None = None
     decision_log: list[dict] = []
-    trade_log: list[dict] = []
     equity_history: list[dict] = []
     progress_log: list[dict] = []
     latest_result: dict | None = None
+    session_start_result: dict | None = None
+    session_start_return_count = 0
     status = "completed"
     stop_reason = "duration_elapsed"
     error_message: str | None = None
@@ -759,7 +916,6 @@ def run_live_decision_runner(
                             fetched_at=fetched_at,
                             latest_weight_1m=latest_weight_1m,
                         )
-                        trade_log = latest_result["trade_log"]
                 elif newest_timestamp <= last_confirmed_timestamp:
                     counters["no_new_confirmed_candle_polls"] += 1
                     progress_reason_code = "no_new_confirmed_candle"
@@ -830,7 +986,16 @@ def run_live_decision_runner(
                             fetched_at=fetched_at,
                             latest_weight_1m=latest_weight_1m,
                         )
-                        trade_log = latest_result["trade_log"]
+
+            if (
+                session_start_result is None
+                and counters["observed_confirmed_candles"] >= runtime["warmup_candles"]
+                and len(confirmed_rows) >= 2
+            ):
+                session_start_result, session_start_return_count = _build_strategy_context_result(
+                    validated_config["strategy"],
+                    confirmed_rows,
+                )
 
             print_fn(
                 format_live_progress_stdout(
@@ -838,6 +1003,7 @@ def run_live_decision_runner(
                         poll_index=poll_index,
                         fetched_at=fetched_at,
                         latest_result=latest_result,
+                        session_start_result=session_start_result,
                         initial_cash=float(validated_config["strategy"]["initial_cash"]),
                         reason_code=progress_reason_code,
                         last_confirmed_timestamp=last_confirmed_timestamp,
@@ -864,10 +1030,13 @@ def run_live_decision_runner(
 
     payload = _build_runtime_payload(
         config=validated_config,
+        confirmed_rows=confirmed_rows,
         decision_log=decision_log,
         equity_history=equity_history,
         progress_log=progress_log,
         latest_result=latest_result,
+        session_start_result=session_start_result,
+        session_start_return_count=session_start_return_count,
         status=status,
         stop_reason=stop_reason,
         started_at=started_at,
@@ -878,7 +1047,6 @@ def run_live_decision_runner(
         error_message=error_message,
         run_context=None,
     )
-    payload["trade_log"] = trade_log
     return payload
 
 

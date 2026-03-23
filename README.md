@@ -166,7 +166,11 @@ warmup 中の candle は売買判断には使いませんが、履歴コンテ�
 以後は `last_confirmed_timestamp` を保持し、同一 timestamp の足では再判断せず、新しく確定した 1 分足だけを順次評価します。
 
 標準出力は実行中には 1 分ごとの progress summary を短い JSON で出し、終了時には `summary` と `decision_log` の先頭 / 末尾の一部だけを表示します。
-progress summary には最低限 `trade_count`、`equity`、`cash` を含め、全量ログは stdout に戻しません。
+progress summary の `trade_count` は live session 中に新規発生した trade 数だけを表し、`equity` / `cash` はその時点の絶対値です。全量ログは stdout に戻しません。
+
+終了時の summary でも `trade_count` / `winning_trades` / `losing_trades` / `realized_pnl_total` は live session 増分だけを表します。
+一方で `final_value` / `final_cash` / `open_position_at_end` は session 終了時点の絶対状態で、`session_start_state` / `session_end_state` を併記して継承状態と session 中の変化量を区別します。
+`trade_log` は run 全体の通算ではなく、live session 中に活動があった trade だけを保存します。
 
 保存先は `output_dir/<run_id>/` 形式の run directory で実行ごとに分離します。
 既定では run directory を最大 10 件保持し、超過時は最も古い run directory から削除します。
