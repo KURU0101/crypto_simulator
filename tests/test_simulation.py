@@ -5,8 +5,10 @@ from trade_simulator.comparison_cli import format_comparison_results, load_compa
 from trade_simulator.config import load_config
 from trade_simulator.comparison import run_case, run_comparisons, summarize_case_result
 from trade_simulator.signals import (
+    generate_consecutive_drop_signals,
     generate_cumulative_drop_signals,
     generate_threshold_signals,
+    simulate_consecutive_drop_strategy,
     simulate_cumulative_drop_strategy,
     simulate_threshold_strategy,
 )
@@ -34,7 +36,7 @@ def test_load_comparison_config() -> None:
     config_path = Path("config/comparison.example.json")
     cases = load_config(config_path)
 
-    assert len(cases) == 3
+    assert len(cases) == 5
     assert cases[0]["name"] == "threshold_baseline"
     assert cases[0]["strategy"] == "threshold"
     assert cases[1]["name"] == "cumulative_drop_fast"
@@ -42,15 +44,19 @@ def test_load_comparison_config() -> None:
     assert cases[1]["entry_window"] == 3
     assert cases[2]["name"] == "cumulative_drop_strict"
     assert cases[2]["entry_cumulative_threshold"] == -0.026
+    assert cases[3]["name"] == "consecutive_drop_fast"
+    assert cases[3]["strategy"] == "consecutive_drop"
+    assert cases[4]["name"] == "consecutive_drop_strict"
+    assert cases[4]["consecutive_periods"] == 4
     assert all(case["initial_cash"] == 100000 for case in cases)
 
 
 def test_load_comparison_cases_accepts_root_list_config() -> None:
     cases = load_comparison_cases("config/comparison.example.json")
 
-    assert len(cases) == 3
+    assert len(cases) == 5
     assert cases[0]["name"] == "threshold_baseline"
-    assert cases[-1]["name"] == "cumulative_drop_strict"
+    assert cases[-1]["name"] == "consecutive_drop_strict"
 
 
 def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> None:
@@ -296,6 +302,119 @@ def test_generate_cumulative_drop_signals_raises_for_invalid_returns_input() -> 
         generate_cumulative_drop_signals([0.01, "bad"], 3, -0.01, 0.005)
 
 
+def test_generate_consecutive_drop_signals_creates_entries_and_exits_from_consecutive_drops() -> None:
+    entry_signals, exit_signals = generate_consecutive_drop_signals(
+        [-0.004, -0.003, -0.005, 0.006, -0.004, -0.003, -0.004, 0.005],
+        3,
+        -0.003,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, True, False, False, False, True, False]
+    assert exit_signals == [False, False, False, True, False, False, False, True]
+
+
+def test_generate_consecutive_drop_signals_does_not_enter_before_periods_are_ready() -> None:
+    entry_signals, exit_signals = generate_consecutive_drop_signals(
+        [-0.01, -0.01],
+        3,
+        -0.003,
+        0.005,
+    )
+
+    assert entry_signals == [False, False]
+    assert exit_signals == [False, False]
+
+
+def test_generate_consecutive_drop_signals_does_not_reenter_before_exit() -> None:
+    entry_signals, exit_signals = generate_consecutive_drop_signals(
+        [-0.004, -0.003, -0.005, -0.006, 0.006],
+        3,
+        -0.003,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, True, False, False]
+    assert exit_signals == [False, False, False, False, True]
+
+
+def test_generate_consecutive_drop_signals_allows_reentry_after_exit() -> None:
+    entry_signals, exit_signals = generate_consecutive_drop_signals(
+        [-0.004, -0.003, -0.005, 0.006, -0.003, -0.003, -0.004, 0.005],
+        3,
+        -0.003,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, True, False, False, False, True, False]
+    assert exit_signals == [False, False, False, True, False, False, False, True]
+
+
+def test_generate_consecutive_drop_signals_accepts_empty_returns() -> None:
+    entry_signals, exit_signals = generate_consecutive_drop_signals([], 3, -0.003, 0.005)
+
+    assert entry_signals == []
+    assert exit_signals == []
+
+
+def test_generate_consecutive_drop_signals_supports_periods_one() -> None:
+    entry_signals, exit_signals = generate_consecutive_drop_signals(
+        [-0.003, 0.005],
+        1,
+        -0.003,
+        0.005,
+    )
+
+    assert entry_signals == [True, False]
+    assert exit_signals == [False, True]
+
+
+def test_generate_consecutive_drop_signals_handles_exact_threshold_matches() -> None:
+    entry_signals, exit_signals = generate_consecutive_drop_signals(
+        [-0.003, -0.003, -0.003, 0.005],
+        3,
+        -0.003,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, True, False]
+    assert exit_signals == [False, False, False, True]
+
+
+def test_generate_consecutive_drop_signals_returns_all_false_when_entry_never_occurs() -> None:
+    entry_signals, exit_signals = generate_consecutive_drop_signals(
+        [-0.002, -0.004, -0.002, 0.006],
+        3,
+        -0.003,
+        0.005,
+    )
+
+    assert entry_signals == [False, False, False, False]
+    assert exit_signals == [False, False, False, False]
+
+
+def test_generate_consecutive_drop_signals_raises_for_invalid_parameters() -> None:
+    with pytest.raises(TypeError, match="consecutive_periods must be an int"):
+        generate_consecutive_drop_signals([0.01], 3.0, -0.003, 0.005)
+
+    with pytest.raises(ValueError, match="consecutive_periods must be greater than 0"):
+        generate_consecutive_drop_signals([0.01], 0, -0.003, 0.005)
+
+    with pytest.raises(TypeError, match="drop_threshold must be a number"):
+        generate_consecutive_drop_signals([0.01], 3, None, 0.005)
+
+    with pytest.raises(TypeError, match="exit_threshold must be a number"):
+        generate_consecutive_drop_signals([0.01], 3, -0.003, "0.005")
+
+
+def test_generate_consecutive_drop_signals_raises_for_invalid_returns_input() -> None:
+    with pytest.raises(TypeError, match="returns must be a list"):
+        generate_consecutive_drop_signals(None, 3, -0.003, 0.005)
+
+    with pytest.raises(TypeError, match=r"returns\[1\] must be a number"):
+        generate_consecutive_drop_signals([0.01, "bad"], 3, -0.003, 0.005)
+
+
 def test_simulate_threshold_strategy_connects_generated_signals_to_simulation() -> None:
     result = simulate_threshold_strategy(
         {
@@ -401,6 +520,70 @@ def test_simulate_cumulative_drop_strategy_handles_unclosed_trade() -> None:
     assert result["final_value"] == pytest.approx(997.997)
 
 
+def test_simulate_consecutive_drop_strategy_connects_generated_signals_to_simulation() -> None:
+    result = simulate_consecutive_drop_strategy(
+        {
+            "simulation_name": "consecutive_drop",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [-0.004, -0.003, -0.005, 0.006, -0.004, -0.003, -0.004, 0.005],
+            "consecutive_periods": 3,
+            "drop_threshold": -0.003,
+            "exit_threshold": 0.005,
+        }
+    )
+
+    assert result["strategy"] == "consecutive_drop"
+    assert result["consecutive_periods"] == 3
+    assert result["drop_threshold"] == -0.003
+    assert result["exit_threshold"] == 0.005
+    assert result["entry_signals"] == [False, False, True, False, False, False, True, False]
+    assert result["exit_signals"] == [False, False, False, True, False, False, False, True]
+    assert result["trade_count"] == 2
+    assert result["final_value"] == pytest.approx(991.02)
+    assert result["final_value"] == pytest.approx(result["equity_curve"][-1])
+
+
+def test_simulate_consecutive_drop_strategy_handles_empty_returns() -> None:
+    result = simulate_consecutive_drop_strategy(
+        {
+            "simulation_name": "consecutive_drop",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [],
+            "consecutive_periods": 3,
+            "drop_threshold": -0.003,
+            "exit_threshold": 0.005,
+        }
+    )
+
+    assert result["entry_signals"] == []
+    assert result["exit_signals"] == []
+    assert result["trade_count"] == 0
+    assert result["final_value"] == 1000.0
+
+
+def test_simulate_consecutive_drop_strategy_handles_unclosed_trade() -> None:
+    result = simulate_consecutive_drop_strategy(
+        {
+            "simulation_name": "consecutive_drop",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [-0.003, -0.003, -0.003, 0.001],
+            "consecutive_periods": 3,
+            "drop_threshold": -0.003,
+            "exit_threshold": 0.005,
+        }
+    )
+
+    assert result["trade_count"] == 1
+    assert result["trade_log"][0]["exited"] is False
+    assert result["final_value"] == pytest.approx(997.9969999999998)
+
+
 def test_run_case_supports_threshold_based_strategy_configs() -> None:
     result = run_case(
         {
@@ -437,10 +620,29 @@ def test_run_case_supports_cumulative_drop_strategy_configs() -> None:
     assert result["exit_signals"] == [False, False, False, True]
 
 
+def test_run_case_supports_consecutive_drop_strategy_configs() -> None:
+    result = run_case(
+        {
+            "strategy": "consecutive_drop",
+            "simulation_name": "consecutive_drop",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [-0.004, -0.003, -0.005, 0.006],
+            "consecutive_periods": 3,
+            "drop_threshold": -0.003,
+            "exit_threshold": 0.005,
+        }
+    )
+
+    assert result["entry_signals"] == [False, False, True, False]
+    assert result["exit_signals"] == [False, False, False, True]
+
+
 def test_run_case_raises_when_strategy_inputs_are_missing() -> None:
     with pytest.raises(
         ValueError,
-        match="each comparison case must include manual signals, threshold parameters, or cumulative_drop parameters",
+        match="each comparison case must include manual signals, threshold parameters, cumulative_drop parameters, or consecutive_drop parameters",
     ):
         run_case(
             {
@@ -452,7 +654,7 @@ def test_run_case_raises_when_strategy_inputs_are_missing() -> None:
 
 
 def test_run_case_raises_for_invalid_strategy_name() -> None:
-    with pytest.raises(ValueError, match="strategy must be one of manual, threshold, or cumulative_drop"):
+    with pytest.raises(ValueError, match="strategy must be one of manual, threshold, cumulative_drop, or consecutive_drop"):
         run_case(
             {
                 "strategy": "unknown",
@@ -1205,7 +1407,7 @@ def test_run_comparisons_handles_single_zero_summary_case() -> None:
     ]
 
 
-def test_run_comparisons_supports_mixed_threshold_and_cumulative_drop_cases() -> None:
+def test_run_comparisons_supports_mixed_threshold_cumulative_drop_and_consecutive_drop_cases() -> None:
     cases = load_config(Path("config/comparison.example.json"))
     comparisons = run_comparisons(cases)
 
@@ -1213,21 +1415,31 @@ def test_run_comparisons_supports_mixed_threshold_and_cumulative_drop_cases() ->
         "threshold_baseline",
         "cumulative_drop_fast",
         "cumulative_drop_strict",
+        "consecutive_drop_fast",
+        "consecutive_drop_strict",
     ]
     assert [comparison["strategy"] for comparison in comparisons] == [
         "threshold",
         "cumulative_drop",
         "cumulative_drop",
+        "consecutive_drop",
+        "consecutive_drop",
     ]
     assert comparisons[1]["trade_count"] >= comparisons[2]["trade_count"]
+    assert comparisons[3]["trade_count"] >= comparisons[4]["trade_count"]
     assert comparisons[0]["final_value"] != comparisons[1]["final_value"]
     assert comparisons[1]["entry_window"] == 3
     assert comparisons[2]["entry_window"] == 5
+    assert comparisons[3]["consecutive_periods"] == 3
+    assert comparisons[4]["consecutive_periods"] == 4
     assert comparisons[0]["entry_threshold"] == 0.01
     assert comparisons[1]["entry_cumulative_threshold"] == -0.01
     assert comparisons[2]["entry_cumulative_threshold"] == -0.026
     assert comparisons[2]["trade_count"] == 0
     assert comparisons[2]["final_value"] == 100000.0
+    assert "drop_threshold" in comparisons[3]
+    assert comparisons[3]["trade_count"] > 0
+    assert comparisons[4]["trade_count"] == 0
 
 
 def test_run_comparisons_allows_cumulative_drop_case_with_unclosed_trade() -> None:
@@ -1280,6 +1492,8 @@ def test_format_comparison_results_returns_json_with_summary_fields() -> None:
             "realized_pnl_total": 0,
             "average_holding_period": 0.0,
             "strategy": "threshold",
+            "entry_threshold": 0.01,
+            "exit_threshold": -0.01,
         }
     ]
 
@@ -1288,6 +1502,7 @@ def test_format_comparison_results_returns_json_with_summary_fields() -> None:
     assert '"name": "baseline"' in formatted
     assert '"final_value": 1000.0' in formatted
     assert '"strategy": "threshold"' in formatted
+    assert '"entry_threshold": 0.01' in formatted
     assert '"win_rate": 0.0' in formatted
     assert '"average_holding_period": 0.0' in formatted
 
@@ -1321,7 +1536,7 @@ def test_load_comparison_cases_raises_when_cases_is_not_a_list(tmp_path: Path) -
 def test_run_comparisons_raises_for_missing_threshold_pair() -> None:
     with pytest.raises(
         ValueError,
-        match="each comparison case must include manual signals, threshold parameters, or cumulative_drop parameters",
+        match="each comparison case must include manual signals, threshold parameters, cumulative_drop parameters, or consecutive_drop parameters",
     ):
         run_comparisons(
             [
@@ -1373,7 +1588,7 @@ def test_run_comparisons_raises_for_missing_cumulative_drop_parameters() -> None
 
 
 def test_run_comparisons_raises_for_invalid_strategy_value() -> None:
-    with pytest.raises(ValueError, match="strategy must be one of manual, threshold, or cumulative_drop"):
+    with pytest.raises(ValueError, match="strategy must be one of manual, threshold, cumulative_drop, or consecutive_drop"):
         run_comparisons(
             [
                 {
@@ -1382,6 +1597,26 @@ def test_run_comparisons_raises_for_invalid_strategy_value() -> None:
                     "simulation_name": "invalid_strategy_case",
                     "initial_cash": 1000,
                     "returns": [0.01],
+                }
+            ]
+        )
+
+
+def test_run_comparisons_raises_for_missing_consecutive_drop_parameters() -> None:
+    with pytest.raises(
+        ValueError,
+        match="consecutive_drop strategy requires consecutive_periods, drop_threshold, and exit_threshold",
+    ):
+        run_comparisons(
+            [
+                {
+                    "name": "invalid_consecutive_drop_case",
+                    "strategy": "consecutive_drop",
+                    "simulation_name": "invalid_consecutive_drop_case",
+                    "initial_cash": 1000,
+                    "returns": [-0.01, -0.01, -0.01],
+                    "consecutive_periods": 3,
+                    "exit_threshold": 0.005,
                 }
             ]
         )

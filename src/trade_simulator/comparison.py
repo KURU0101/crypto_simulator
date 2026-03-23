@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from trade_simulator.signals import simulate_cumulative_drop_strategy, simulate_threshold_strategy
+from trade_simulator.signals import (
+    simulate_consecutive_drop_strategy,
+    simulate_cumulative_drop_strategy,
+    simulate_threshold_strategy,
+)
 from trade_simulator.simulation import simulate
 
 
@@ -35,6 +39,10 @@ def summarize_case_result(name: str, result: dict) -> dict:
         summary["entry_window"] = result["entry_window"]
         summary["entry_cumulative_threshold"] = result["entry_cumulative_threshold"]
 
+    if "consecutive_periods" in result and "drop_threshold" in result:
+        summary["consecutive_periods"] = result["consecutive_periods"]
+        summary["drop_threshold"] = result["drop_threshold"]
+
     return summary
 
 
@@ -58,8 +66,15 @@ def run_case(case: dict) -> dict:
             "cumulative_drop strategy requires entry_window, entry_cumulative_threshold, and exit_threshold"
         )
 
+    if strategy == "consecutive_drop":
+        if all(key in case for key in ("consecutive_periods", "drop_threshold", "exit_threshold")):
+            return simulate_consecutive_drop_strategy(case)
+        raise ValueError(
+            "consecutive_drop strategy requires consecutive_periods, drop_threshold, and exit_threshold"
+        )
+
     if strategy is not None:
-        raise ValueError("strategy must be one of manual, threshold, or cumulative_drop")
+        raise ValueError("strategy must be one of manual, threshold, cumulative_drop, or consecutive_drop")
 
     if "entry_signals" in case and "exit_signals" in case:
         return simulate(case)
@@ -70,8 +85,11 @@ def run_case(case: dict) -> dict:
     if all(key in case for key in ("entry_window", "entry_cumulative_threshold", "exit_threshold")):
         return simulate_cumulative_drop_strategy(case)
 
+    if all(key in case for key in ("consecutive_periods", "drop_threshold", "exit_threshold")):
+        return simulate_consecutive_drop_strategy(case)
+
     raise ValueError(
-        "each comparison case must include manual signals, threshold parameters, or cumulative_drop parameters"
+        "each comparison case must include manual signals, threshold parameters, cumulative_drop parameters, or consecutive_drop parameters"
     )
 
 

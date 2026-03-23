@@ -105,6 +105,47 @@ def generate_cumulative_drop_signals(
     return entry_signals, exit_signals
 
 
+def generate_consecutive_drop_signals(
+    returns: object,
+    consecutive_periods: object,
+    drop_threshold: object,
+    exit_threshold: object,
+) -> tuple[list[bool], list[bool]]:
+    validated_returns = _validate_returns(returns)
+    validated_consecutive_periods = _validate_positive_int(consecutive_periods, "consecutive_periods")
+    validated_drop_threshold = _validate_numeric(drop_threshold, "drop_threshold")
+    validated_exit_threshold = _validate_numeric(exit_threshold, "exit_threshold")
+
+    entry_signals = []
+    exit_signals = []
+    is_in_position = False
+
+    for period_index, period_return in enumerate(validated_returns):
+        if is_in_position:
+            should_exit = period_return >= validated_exit_threshold
+            entry_signals.append(False)
+            exit_signals.append(should_exit)
+            if should_exit:
+                is_in_position = False
+            continue
+
+        if period_index + 1 < validated_consecutive_periods:
+            entry_signals.append(False)
+            exit_signals.append(False)
+            continue
+
+        recent_returns = validated_returns[
+            period_index - validated_consecutive_periods + 1 : period_index + 1
+        ]
+        should_enter = all(period <= validated_drop_threshold for period in recent_returns)
+        entry_signals.append(should_enter)
+        exit_signals.append(False)
+        if should_enter:
+            is_in_position = True
+
+    return entry_signals, exit_signals
+
+
 def _simulate_with_generated_signals(config: dict, entry_signals: list[bool], exit_signals: list[bool]) -> dict:
     simulation_config = dict(config)
     simulation_config["entry_signals"] = entry_signals
@@ -138,5 +179,21 @@ def simulate_cumulative_drop_strategy(config: dict) -> dict:
     result["strategy"] = "cumulative_drop"
     result["entry_window"] = int(config["entry_window"])
     result["entry_cumulative_threshold"] = float(config["entry_cumulative_threshold"])
+    result["exit_threshold"] = float(config["exit_threshold"])
+    return result
+
+
+def simulate_consecutive_drop_strategy(config: dict) -> dict:
+    entry_signals, exit_signals = generate_consecutive_drop_signals(
+        config["returns"],
+        config["consecutive_periods"],
+        config["drop_threshold"],
+        config["exit_threshold"],
+    )
+
+    result = _simulate_with_generated_signals(config, entry_signals, exit_signals)
+    result["strategy"] = "consecutive_drop"
+    result["consecutive_periods"] = int(config["consecutive_periods"])
+    result["drop_threshold"] = float(config["drop_threshold"])
     result["exit_threshold"] = float(config["exit_threshold"])
     return result
