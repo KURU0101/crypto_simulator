@@ -1,6 +1,7 @@
 from pathlib import Path
 import pytest
 
+from trade_simulator.comparison_cli import format_comparison_results, load_comparison_cases, main as comparison_main
 from trade_simulator.config import load_config
 from trade_simulator.comparison import run_comparisons, summarize_case_result
 from trade_simulator.simulation import simulate
@@ -30,6 +31,52 @@ def test_load_comparison_config() -> None:
     assert len(cases) == 2
     assert cases[0]["name"] == "zero_cost"
     assert cases[1]["name"] == "with_cost"
+
+
+def test_load_comparison_cases_accepts_root_list_config() -> None:
+    cases = load_comparison_cases("config/comparison.example.json")
+
+    assert len(cases) == 2
+    assert cases[0]["name"] == "zero_cost"
+    assert cases[1]["name"] == "with_cost"
+
+
+def test_load_comparison_cases_reads_cases_from_dict_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "comparison.json"
+    config_path.write_text(
+        """
+        {
+          "cases": [
+            {
+              "name": "single",
+              "simulation_name": "single",
+              "initial_cash": 1000,
+              "fee_rate": 0.0,
+              "slippage_rate": 0.0,
+              "returns": [],
+              "entry_signals": [],
+              "exit_signals": []
+            }
+          ]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cases = load_comparison_cases(str(config_path))
+
+    assert cases == [
+        {
+            "name": "single",
+            "simulation_name": "single",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [],
+            "entry_signals": [],
+            "exit_signals": [],
+        }
+    ]
 
 
 def test_simulate_matches_manually_verified_example_with_zero_costs() -> None:
@@ -768,3 +815,62 @@ def test_run_comparisons_handles_single_zero_summary_case() -> None:
             "average_holding_period": 0.0,
         }
     ]
+
+
+def test_format_comparison_results_returns_json_with_summary_fields() -> None:
+    results = [
+        {
+            "name": "baseline",
+            "final_value": 1000.0,
+            "trade_count": 0,
+            "periods_in_position": 0,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "realized_pnl_total": 0,
+            "average_holding_period": 0.0,
+        }
+    ]
+
+    formatted = format_comparison_results(results)
+
+    assert '"name": "baseline"' in formatted
+    assert '"final_value": 1000.0' in formatted
+    assert '"average_holding_period": 0.0' in formatted
+
+
+def test_comparison_main_prints_same_results_as_run_comparisons(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = comparison_main(["--config", "config/comparison.example.json"])
+
+    captured = capsys.readouterr()
+    results = load_config(Path("config/comparison.example.json"))
+
+    assert exit_code == 0
+    assert captured.out == format_comparison_results(run_comparisons(results)) + "\n"
+
+
+def test_load_comparison_cases_raises_when_cases_key_is_missing(tmp_path: Path) -> None:
+    config_path = tmp_path / "comparison.json"
+    config_path.write_text('{"name": "missing_cases"}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="comparison config must be a list or include a cases list"):
+        load_comparison_cases(str(config_path))
+
+
+def test_load_comparison_cases_raises_when_cases_is_not_a_list(tmp_path: Path) -> None:
+    config_path = tmp_path / "comparison.json"
+    config_path.write_text('{"cases": {"name": "invalid"}}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="comparison config cases must be a list"):
+        load_comparison_cases(str(config_path))
+
+
+def test_comparison_main_handles_empty_cases_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    config_path = tmp_path / "comparison.json"
+    config_path.write_text('{"cases": []}', encoding="utf-8")
+
+    exit_code = comparison_main(["--config", str(config_path)])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out == "[]\n"
