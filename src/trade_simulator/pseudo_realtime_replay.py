@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Tuple
 
+from trade_simulator.data import build_symbol_work_csv_path, load_data_sources_config, select_data_source
 from trade_simulator.data.ohlcv import REQUIRED_OHLCV_COLUMNS, load_returns_from_ohlcv_csv
 from trade_simulator.simulation import simulate
 
@@ -40,23 +41,28 @@ def _validate_bool(value: object, name: str) -> bool:
 def load_pseudo_realtime_config(config: object) -> dict:
     if not isinstance(config, dict):
         raise ValueError("pseudo-realtime config must be a dict")
-    if "data_source" not in config or not isinstance(config["data_source"], dict):
-        raise ValueError("pseudo-realtime config must include a data_source dict")
     if "replay" not in config or not isinstance(config["replay"], dict):
         raise ValueError("pseudo-realtime config must include a replay dict")
     if "strategy" not in config or not isinstance(config["strategy"], dict):
         raise ValueError("pseudo-realtime config must include a strategy dict")
 
-    data_source = dict(config["data_source"])
+    data_source_config = {}
+    if "data_source" in config:
+        data_source_config["data_source"] = config["data_source"]
+    if "data_sources" in config:
+        data_source_config["data_sources"] = config["data_sources"]
+    if not data_source_config:
+        raise ValueError("pseudo-realtime config must include a data_source dict or data_sources dict")
+
+    data_sources = load_data_sources_config(data_source_config)
+    data_source = dict(select_data_source(data_source_config))
     replay = dict(config["replay"])
     strategy = dict(config["strategy"])
 
-    if "ohlcv_csv_path" not in data_source:
-        raise ValueError("data_source must include ohlcv_csv_path")
-    if "work_csv_path" not in replay:
-        raise ValueError("replay must include work_csv_path")
     if "warmup_rows" not in replay:
         raise ValueError("replay must include warmup_rows")
+    if "work_csv_path" not in replay and "work_dir" not in replay:
+        raise ValueError("replay must include work_csv_path or work_dir")
 
     mode = replay.get("mode", "fast")
     if mode not in {"fast", "realtime"}:
@@ -72,6 +78,17 @@ def load_pseudo_realtime_config(config: object) -> dict:
         "tick_interval_seconds",
     )
     replay["emit_progress_log"] = _validate_bool(emit_progress_log, "emit_progress_log")
+    replay["selected_symbol"] = data_source["symbol"]
+    replay["available_symbols"] = data_sources["symbols"]
+    replay["default_symbol"] = data_sources["default_symbol"]
+    if "work_csv_path" in replay:
+        if not isinstance(replay["work_csv_path"], str) or not replay["work_csv_path"].strip():
+            raise TypeError("work_csv_path must be a non-empty string")
+    else:
+        work_dir = replay["work_dir"]
+        if not isinstance(work_dir, str) or not work_dir.strip():
+            raise TypeError("work_dir must be a non-empty string")
+        replay["work_csv_path"] = build_symbol_work_csv_path(work_dir, data_source["symbol"])
 
     return {
         "data_source": data_source,
@@ -485,6 +502,7 @@ def run_pseudo_realtime_replay(
     summary = {
         "simulation_name": final_result["simulation_name"],
         "symbol": data_source.get("symbol", "BTC/USDT"),
+        "available_symbols": replay_config["available_symbols"],
         "source_csv_path": source_csv_path,
         "work_csv_path": work_csv_path,
         "mode": mode,

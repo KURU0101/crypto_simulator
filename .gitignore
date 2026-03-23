@@ -14,6 +14,11 @@ venv/
 
 data/*
 !data/.gitkeep
+!data/market/
+!data/market/btcusdt/
+!data/market/btcusdt/1h_sample.csv
+!data/market/ethusdt/
+!data/market/ethusdt/1h_sample.csv
 
 outputs/*
 !outputs/.gitkeep

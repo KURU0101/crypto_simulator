@@ -1,7 +1,16 @@
 {
-  "data_source": {
-    "symbol": "BTC/USDT",
-    "ohlcv_csv_path": "data/btcusdt_1h_sample.csv"
+  "data_sources": {
+    "default_symbol": "BTC/USDT",
+    "symbols": [
+      {
+        "symbol": "BTC/USDT",
+        "ohlcv_csv_path": "data/market/btcusdt/1h_sample.csv"
+      },
+      {
+        "symbol": "ETH/USDT",
+        "ohlcv_csv_path": "data/market/ethusdt/1h_sample.csv"
+      }
+    ]
   },
   "cases": [
     {

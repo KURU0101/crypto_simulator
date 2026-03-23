@@ -49,11 +49,32 @@ source .venv/bin/activate
 python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json
 ```
 
+複数銘柄データ設定の要約確認:
+
+```bash
+source .venv/bin/activate
+python3 scripts/summarize_market_data.py --config config/real_data_comparison.example.json
+```
+
 リアルタイム判定ランナーの最小実行例:
 
 ```bash
 source .venv/bin/activate
 python3 scripts/run_live_decision_runner.py --config config/live_decision_runner.example.json
+```
+
+SNS signal 入力の要約確認:
+
+```bash
+source .venv/bin/activate
+python3 scripts/summarize_sns_signals.py --input data/signals/sns/sample.json
+```
+
+News signal 入力の要約確認:
+
+```bash
+source .venv/bin/activate
+python3 scripts/summarize_news_signals.py --input data/signals/news/sample.json
 ```
 
 `Makefile` を使う場合:
@@ -137,8 +158,10 @@ comparison summary では、既存の `final_value` / `trade_count` / `win_rate`
 returns は close-to-close 定義で計算し、各 return はひとつ前の close から当該 timestamp の close までの変化率です。
 生成された returns の timestamp は後ろ側の close timestamp に揃えます。
 
-現在の最小構成では `BTC/USDT` のローカルサンプル OHLCV を [data/btcusdt_1h_sample.csv](/home/kuru0101/crypto_simulator/crypto_simulator/data/btcusdt_1h_sample.csv) に同梱しています。
+複数銘柄の価格データ土台では `data_sources.default_symbol` と `data_sources.symbols` を使い、ローカル配置は `data/market/<symbol_slug>/...csv` を標準例とします。
+現在の最小構成では `BTC/USDT` と `ETH/USDT` のローカルサンプル OHLCV を [data/market/btcusdt/1h_sample.csv](/home/kuru0101/crypto_simulator/crypto_simulator/data/market/btcusdt/1h_sample.csv) と [data/market/ethusdt/1h_sample.csv](/home/kuru0101/crypto_simulator/crypto_simulator/data/market/ethusdt/1h_sample.csv) に同梱しています。
 実データ comparison 用の設定例は [config/real_data_comparison.example.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/real_data_comparison.example.json) です。
+comparison は `--symbol` で対象銘柄を切り替えられます。
 
 ## 疑似リアルタイム再生
 
@@ -147,6 +170,7 @@ returns は close-to-close 定義で計算し、各 return はひとつ前の cl
 
 `warmup_rows` は、起動直後に売買判断をせずデータ取得だけを行う行数です。
 判断開始後も warmup 中の履歴は strategy 計算の文脈として使えますが、warmup 対象期間の signal は無効化して、warmup 中に売買が始まらないようにしています。
+複数銘柄設定では `replay.work_dir` から `<symbol_slug>_replay_work.csv` を導出し、`--symbol` で再生対象を切り替えられます。
 
 decision log の理由コードは以下の2系統に分けます。
 
@@ -176,6 +200,19 @@ progress summary の `trade_count` は live session 中に新規発生した tra
 
 標準出力の full history 抑制方針は維持し、詳細は run directory 配下の JSON ファイルで確認します。
 429 受信時は最小限の retry / backoff を行い、`X-MBX-USED-WEIGHT-1M` が返る場合は decision / progress 文脈と summary に残します。
+複数銘柄設定では `data_sources.default_symbol` と `data_sources.symbols[]` を使い、`--symbol ETHUSDT` のように対象銘柄を切り替えられます。summary には `symbol` / `default_symbol` / `available_symbols` を残し、progress stdout にも `symbol` を含めます。
+
+## External Signal Inputs
+
+SNS / News は今回 `simulate` に直結せず、分析済みシグナルの受け取り口だけを追加しています。
+保存形式は JSON array または NDJSON、時刻は timezone 付き ISO8601 を受けて UTC `Z` に正規化します。
+
+SNS は `source` / `timestamp` / `mention_count` / `positive_score` / `negative_score` / `neutral_score` / `activity_score` / `anomaly_score` と、`symbol` または `topic` を持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_topic` を返し、topic-only データも保持できます。
+
+News は `source` / `published_at` / `headline` / `relevance_score` / `sentiment_score` / `impact_score` / `category` と、`url` または `source_id`、さらに `symbol` / `asset` / `topic` のいずれかを持つ最小 schema です。内部表現は `records` と `by_symbol` / `by_asset` / `by_topic` を返します。
+
+サンプルは [data/signals/sns/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/sns/sample.json) と [data/signals/news/sample.json](/home/kuru0101/crypto_simulator/crypto_simulator/data/signals/news/sample.json) に置いています。
+設計メモと無料公開データ候補は [docs/external_signals.md](/home/kuru0101/crypto_simulator/crypto_simulator/docs/external_signals.md) に整理しています。
 
 ## ディレクトリ方針
 

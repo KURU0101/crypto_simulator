@@ -59,29 +59,94 @@ def _validate_bool(value: object, name: str) -> bool:
     return value
 
 
+def _validate_live_data_source_entry(source: object, *, entry_name: str) -> dict:
+    if not isinstance(source, dict):
+        raise ValueError(f"{entry_name} must be a dict")
+    if "symbol" not in source:
+        raise ValueError(f"{entry_name} must include symbol")
+    if "interval" not in source:
+        raise ValueError(f"{entry_name} must include interval")
+    if not isinstance(source["symbol"], str) or not source["symbol"].strip():
+        raise TypeError(f"{entry_name} symbol must be a non-empty string")
+    if not isinstance(source["interval"], str) or not source["interval"].strip():
+        raise TypeError(f"{entry_name} interval must be a non-empty string")
+
+    normalized_source = dict(source)
+    normalized_source["symbol"] = source["symbol"].strip()
+    normalized_source["interval"] = source["interval"].strip()
+    if normalized_source["interval"] != "1m":
+        raise ValueError(f"{entry_name} interval must be 1m")
+    normalized_source["limit"] = _validate_positive_int(normalized_source.get("limit", 120), f"{entry_name} limit")
+    return normalized_source
+
+
+def _load_live_data_sources_config(config: object) -> dict:
+    if not isinstance(config, dict):
+        raise ValueError("live decision runner config must be a dict")
+
+    if "data_sources" in config:
+        raw_data_sources = config["data_sources"]
+        if not isinstance(raw_data_sources, dict):
+            raise ValueError("data_sources must be a dict")
+        if "symbols" not in raw_data_sources:
+            raise ValueError("data_sources must include symbols")
+        if not isinstance(raw_data_sources["symbols"], list):
+            raise ValueError("data_sources symbols must be a list")
+        sources = [
+            _validate_live_data_source_entry(source, entry_name=f"data_sources.symbols[{index}]")
+            for index, source in enumerate(raw_data_sources["symbols"])
+        ]
+        default_symbol = raw_data_sources.get("default_symbol")
+    elif "data_source" in config:
+        sources = [_validate_live_data_source_entry(config["data_source"], entry_name="data_source")]
+        default_symbol = sources[0]["symbol"]
+    else:
+        raise ValueError("live decision runner config must include a data_source dict or data_sources dict")
+
+    if not sources:
+        raise ValueError("at least one live data source is required")
+
+    symbols = [source["symbol"] for source in sources]
+    if len(set(symbols)) != len(symbols):
+        raise ValueError("symbol must be unique across live data sources")
+
+    if default_symbol is None:
+        default_symbol = symbols[0]
+    if not isinstance(default_symbol, str) or not default_symbol.strip():
+        raise TypeError("default_symbol must be a non-empty string")
+    if default_symbol not in symbols:
+        raise ValueError("default_symbol must match one of the configured symbols")
+
+    return {
+        "default_symbol": default_symbol,
+        "symbols": list(symbols),
+        "sources": sources,
+        "sources_by_symbol": {source["symbol"]: source for source in sources},
+    }
+
+
+def _select_live_data_source(config: object, symbol: str | None = None) -> tuple[dict, dict]:
+    data_sources = _load_live_data_sources_config(config)
+    selected_symbol = symbol or data_sources["default_symbol"]
+    if selected_symbol not in data_sources["sources_by_symbol"]:
+        raise ValueError(f"symbol must be one of: {', '.join(data_sources['symbols'])}")
+    return dict(data_sources["sources_by_symbol"][selected_symbol]), data_sources
+
+
 def load_live_decision_runner_config(config: object) -> dict:
     if not isinstance(config, dict):
         raise ValueError("live decision runner config must be a dict")
 
-    required_sections = ("data_source", "runtime", "strategy", "output", "retry")
+    required_sections = ("runtime", "strategy", "output", "retry")
     for section in required_sections:
         if section not in config or not isinstance(config[section], dict):
             raise ValueError(f"live decision runner config must include a {section} dict")
 
-    data_source = dict(config["data_source"])
+    data_source, data_sources = _select_live_data_source(config)
     runtime = dict(config["runtime"])
     strategy = dict(config["strategy"])
     output = dict(config["output"])
     retry = dict(config["retry"])
-
-    if "symbol" not in data_source:
-        raise ValueError("data_source must include symbol")
-    if "interval" not in data_source:
-        raise ValueError("data_source must include interval")
-    if data_source["interval"] != "1m":
-        raise ValueError("data_source interval must be 1m")
-
-    data_source["limit"] = _validate_positive_int(data_source.get("limit", 120), "limit")
     runtime["poll_interval_seconds"] = _validate_non_negative_number(
         runtime.get("poll_interval_seconds", 60),
         "poll_interval_seconds",
@@ -118,6 +183,7 @@ def load_live_decision_runner_config(config: object) -> dict:
 
     return {
         "data_source": data_source,
+        "data_sources": data_sources,
         "runtime": runtime,
         "strategy": strategy,
         "output": output,
@@ -487,6 +553,7 @@ def build_live_progress_stdout_payload(
     initial_cash: float,
     reason_code: str,
     last_confirmed_timestamp: str | None,
+    symbol: str,
 ) -> dict:
     session_end_state = _derive_session_end_state(
         initial_cash=initial_cash,
@@ -495,6 +562,7 @@ def build_live_progress_stdout_payload(
 
     return {
         "type": "live_progress",
+        "symbol": symbol,
         "poll_index": poll_index,
         "fetched_at": fetched_at,
         "reason_code": reason_code,
@@ -658,6 +726,7 @@ def _build_runtime_payload(
 ) -> dict:
     strategy_config = config["strategy"]
     data_source = config["data_source"]
+    data_sources = config["data_sources"]
     output = config["output"]
     initial_cash = float(strategy_config["initial_cash"])
     session_start_state = _build_flat_session_start_state(initial_cash)
@@ -690,6 +759,8 @@ def _build_runtime_payload(
         "stop_reason": stop_reason,
         "error_message": error_message,
         "symbol": data_source["symbol"],
+        "default_symbol": data_sources["default_symbol"],
+        "available_symbols": data_sources["symbols"],
         "interval": data_source["interval"],
         "poll_interval_seconds": config["runtime"]["poll_interval_seconds"],
         "duration_seconds": config["runtime"]["duration_seconds"],
@@ -741,6 +812,7 @@ def _build_runtime_payload(
 
     return {
         "data_source": data_source,
+        "data_sources": data_sources,
         "runtime": config["runtime"],
         "output": output,
         "retry": config["retry"],
@@ -758,13 +830,23 @@ def _build_runtime_payload(
 def run_live_decision_runner(
     config: dict,
     *,
+    symbol: str | None = None,
     fetch_klines_fn: Callable[[str, str, int], dict] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
     now_fn: Callable[[], float] | None = None,
     stop_requested_fn: Callable[[], bool] | None = None,
     print_fn: Callable[[str], None] | None = None,
 ) -> dict:
-    validated_config = load_live_decision_runner_config(config)
+    selected_config = dict(config)
+    if symbol is not None:
+        data_source, data_sources = _select_live_data_source(config, symbol=symbol)
+        selected_config["data_source"] = data_source
+        selected_config["data_sources"] = {
+            "default_symbol": data_source["symbol"],
+            "symbols": list(data_sources["sources"]),
+        }
+
+    validated_config = load_live_decision_runner_config(selected_config)
 
     if fetch_klines_fn is None:
         fetch_klines_fn = fetch_binance_spot_klines
@@ -999,6 +1081,7 @@ def run_live_decision_runner(
                         initial_cash=float(validated_config["strategy"]["initial_cash"]),
                         reason_code=progress_reason_code,
                         last_confirmed_timestamp=last_confirmed_timestamp,
+                        symbol=data_source["symbol"],
                     )
                 )
             )
@@ -1163,6 +1246,7 @@ def format_live_decision_stdout(result: dict) -> str:
 def build_live_decision_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the live decision runner with confirmed-candle polling.")
     parser.add_argument("--config", required=True, help="Path to a live decision runner JSON config file.")
+    parser.add_argument("--symbol", help="Configured symbol to run. Defaults to data_sources.default_symbol.")
     return parser
 
 
@@ -1173,7 +1257,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
-    result = run_live_decision_runner(config)
+    result = run_live_decision_runner(config, symbol=args.symbol)
     save_live_decision_runner_result(result, result["output"]["output_dir"])
     print(format_live_decision_stdout(result))
     return 0 if result["summary"]["status"] != "failed" else 1
