@@ -267,6 +267,85 @@ mention_count の意味:
 
 この差分は record `metadata.mention_count_semantics` と summary `source_specific.mention_count_semantics` で追えるようにしています。
 
+## Integrated Observation
+
+保存済み summary を横断して読む専用導線を追加し、collector 群の最新状況を一目で確認できるようにします。これは読み取り専用で、外部再取得、raw 保存、`simulate` 連携、売買ロジック接続は行いません。
+
+対象:
+
+- `var/news_signals/**/summary.json`
+- `var/sns_signals/**/summary.json`
+- 必要時のみ補助的に `saved_paths` や run directory を参照する
+
+実行:
+
+- `python3 scripts/observe_external_signals.py`
+- `python3 scripts/observe_external_signals.py --group-by signal_type`
+- `python3 scripts/observe_external_signals.py --group-by source --latest-only`
+- `python3 scripts/observe_external_signals.py --signal-type news --source coindesk_rss --format verbose`
+- `python3 scripts/observe_external_signals.py --format json`
+
+最小オプション:
+
+- `--root-dir`: `news_signals/` と `sns_signals/` を含む基底ディレクトリ。既定は `var`
+- `--signal-type`: `all` / `news` / `sns`
+- `--source`: collector source 名で絞り込み
+- `--group-by`: `overall` / `signal_type` / `source`
+- `--latest-only`: filter 後の `signal_type + source` ごとに最新 run だけを表示
+- `--format`: `condensed` / `verbose` / `json`
+
+統合観測の共通表示項目:
+
+- `signal_type`
+- `source`
+- `run_id`
+- `started_at`
+- `ended_at`
+- `status`
+- `fetched_item_count`
+- `normalized_success_count`
+- `validation_failure_count`
+- `saved_record_count`
+- `duplicate_count`
+- `warnings`
+- `errors`
+- `saved_paths`
+- `source_specific` の有無
+- `topic_distribution` の概要
+- `symbol_distribution` の概要
+
+表示方針:
+
+- `condensed`: run ごとの共通項目と warning / error / source_specific 有無を優先表示する
+- `verbose`: `source_specific` と topic / symbol 分布の詳細を追加表示する
+- `json`: 後段処理や差分確認用に totals / groups / runs をそのまま返す
+
+異常 run の扱い:
+
+- `summary.json` 欠損 run directory は `status=missing_summary` として残す
+- JSON 破損や object 以外の summary は `status=invalid_summary` として残す
+- `started_at` / `ended_at` などの必須共通項目が欠けていても、読める範囲で一覧に残し `missing_required_fields` を付ける
+
+共通項目と source 固有項目の切り分け:
+
+- 共通項目は summary のトップレベルから最小限だけ読む
+- source 固有項目は `source_specific` に保持し、無理に cross-source 共通化しない
+- source ごとの差分を潰さず、一覧では「有無」を出し、必要時だけ verbose で掘る
+
+現時点の制約:
+
+- 集約の主役は `summary.json` であり、collector ごとの詳細差分は summary 側の観測粒度に依存する
+- `normalized.json` を横断分析して canonical な topic / symbol を再構築する段階には入らない
+- latest 判定は保存済み `started_at` / `ended_at` / `run_id` に依存する
+- source 横断のイベント同一性判定やスコアリングは行わない
+
+次の拡張ポイント:
+
+- collector が増えても `source_specific` を保持したまま自然に一覧へ追加できる
+- `normalized.json` を補助読込して summary 欠損時の追加診断を行う
+- cross-source の canonical topic や symbol 別ビューを別レイヤで追加する
+- failed / warning run のみを強調する専用 view を足す
+
 source 増加で見えた制約:
 
 - collector 設定はまだ 1 run 1 source 固定で、複数 source 同時収集は未対応

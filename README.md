@@ -244,6 +244,14 @@ SNS summary は、共通項目をトップレベルに維持しつつ、source �
 
 ニュース collector の最小接続では CoinDesk RSS を 1 ソースだけ対象にし、`collector -> adapter -> save -> observe` を分離しています。raw RSS は保存せず、正規化後の bundle と観測 summary だけを `var/news_signals/<source>/<run_id>/` に保存します。
 
+統合観測導線として `python3 scripts/observe_external_signals.py` を追加し、保存済み `var/news_signals/**/summary.json` と `var/sns_signals/**/summary.json` を横断して読めるようにしました。これは読み取り専用で、外部再取得も `simulate` 連携も行いません。
+
+既定の `condensed` 表示では collector ごとの最新状況を一覧でき、`--group-by overall|signal_type|source`、`--signal-type news|sns`、`--source <collector_source>`、`--latest-only` で見方を切り替えられます。`--format verbose` では `source_specific` と topic / symbol 分布の詳細、`--format json` では集約結果全体を JSON で確認できます。
+
+統合観測が見る共通項目は `signal_type` / `source` / `run_id` / `started_at` / `ended_at` / `status` / `fetched_item_count` / `normalized_success_count` / `validation_failure_count` / `saved_record_count` / `duplicate_count` / `warnings` / `errors` / `saved_paths` です。`source_specific` は無理に共通化せず、存在有無を一覧に出したうえで verbose 時だけ分けて表示します。
+
+`summary.json` が欠損している run directory や、JSON として壊れている summary も観測結果に残します。今の制約は、集約対象が保存済み summary 中心であること、source ごとの差分は `source_specific` に残したまま最小限しか吸収しないこと、topic / symbol 分布は summary 側の既存集計に依存することです。
+
 ## ディレクトリ方針
 
 - `scripts/` には実行入口のみを置く
