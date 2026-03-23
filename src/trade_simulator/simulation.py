@@ -3,15 +3,19 @@ from __future__ import annotations
 
 def simulate(config: dict) -> dict:
     initial_cash = float(config["initial_cash"])
-    monthly_return_rate = float(config["monthly_return_rate"])
-    months = int(config["months"])
+    returns = [float(period_return) for period_return in config["returns"]]
 
-    final_value = initial_cash * ((1 + monthly_return_rate) ** months)
+    equity_curve = [initial_cash]
+    current_value = initial_cash
+
+    for period_return in returns:
+        current_value *= 1 + period_return
+        equity_curve.append(current_value)
 
     return {
         "simulation_name": config["simulation_name"],
         "initial_cash": initial_cash,
-        "monthly_return_rate": monthly_return_rate,
-        "months": months,
-        "final_value": final_value,
+        "returns": returns,
+        "equity_curve": equity_curve,
+        "final_value": current_value,
     }

@@ -1,6 +1,10 @@
 {
   "simulation_name": "example_simulation",
   "initial_cash": 1000000,
-  "monthly_return_rate": 0.01,
-  "months": 12
+  "returns": [
+    0.01,
+    -0.02,
+    0.03,
+    0.01
+  ]
 }

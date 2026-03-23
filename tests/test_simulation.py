@@ -14,14 +14,14 @@ def test_load_config() -> None:
 
     assert config["simulation_name"] == "example_simulation"
     assert config["initial_cash"] == 1000000
+    assert config["returns"] == [0.01, -0.02, 0.03, 0.01]
 
 
 def test_simulate_result_structure() -> None:
     config = {
         "simulation_name": "test",
         "initial_cash": 1000,
-        "monthly_return_rate": 0.01,
-        "months": 2,
+        "returns": [0.1, -0.05, 0.02],
     }
 
     result = simulate(config)
@@ -29,9 +29,11 @@ def test_simulate_result_structure() -> None:
     assert set(result) == {
         "simulation_name",
         "initial_cash",
-        "monthly_return_rate",
-        "months",
+        "returns",
+        "equity_curve",
         "final_value",
     }
     assert result["simulation_name"] == "test"
-    assert result["final_value"] > result["initial_cash"]
+    assert result["returns"] == [0.1, -0.05, 0.02]
+    assert result["equity_curve"] == [1000.0, 1100.0, 1045.0, 1065.9]
+    assert result["final_value"] == 1065.9
