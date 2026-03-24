@@ -317,6 +317,80 @@ def test_prepare_cases_with_real_data_returns_connects_returns_to_comparison() -
     assert prepared_cases[1]["returns"] == prepared_cases[0]["returns"]
 
 
+def test_prepare_cases_with_real_data_returns_builds_manual_signals_from_external_summaries(monkeypatch) -> None:
+    data_source = {
+        "data_source": {
+            "symbol": "BTC/USDT",
+            "ohlcv_csv_path": "data/market/btcusdt/1h_sample.csv",
+        }
+    }
+    cases = [
+        {
+            "name": "external_signal_real_data",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "external_signal": {
+                "summary_root_dir": "var/test",
+                "topics": ["policy"],
+                "entry_count_threshold": 2,
+                "exit_after_inactive_periods": 1,
+            },
+        }
+    ]
+
+    monkeypatch.setattr(
+        "trade_simulator.real_data_comparison_cli.scan_saved_signal_summaries",
+        lambda root_dir: [
+            {
+                "status": "completed",
+                "ended_at": "2024-01-01T02:30:00Z",
+                "symbol_distribution": {"BTCUSDT": 1},
+                "topic_distribution": {"policy": 1},
+            }
+        ],
+    )
+
+    _, prepared_cases = prepare_cases_with_real_data_returns(data_source, cases)
+
+    assert prepared_cases[0]["strategy"] == "manual"
+    assert prepared_cases[0]["entry_signals"] == [False, False, True, False, False]
+    assert prepared_cases[0]["exit_signals"] == [False, False, False, True, False]
+    assert prepared_cases[0]["external_signal_consumption_features"]["series"]["matching_signal_count"] == [0, 0, 2, 0, 0]
+    assert prepared_cases[0]["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == [0.0, 0.0, 2.0, 0.0, 0.0]
+
+
+def test_prepare_cases_with_real_data_returns_keeps_zeroed_external_signal_series_when_no_summary_matches(monkeypatch) -> None:
+    data_source = {
+        "data_source": {
+            "symbol": "BTC/USDT",
+            "ohlcv_csv_path": "data/market/btcusdt/1h_sample.csv",
+        }
+    }
+    cases = [
+        {
+            "name": "external_signal_real_data",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "external_signal": {},
+        }
+    ]
+
+    monkeypatch.setattr(
+        "trade_simulator.real_data_comparison_cli.scan_saved_signal_summaries",
+        lambda root_dir: [],
+    )
+
+    _, prepared_cases = prepare_cases_with_real_data_returns(data_source, cases)
+
+    assert prepared_cases[0]["strategy"] == "manual"
+    assert prepared_cases[0]["entry_signals"] == [False, False, False, False, False]
+    assert prepared_cases[0]["exit_signals"] == [False, False, False, False, False]
+    assert prepared_cases[0]["external_signal_consumption_features"]["series"]["matching_signal_count"] == [0, 0, 0, 0, 0]
+    assert prepared_cases[0]["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == [0.0, 0.0, 0.0, 0.0, 0.0]
+
+
 def test_real_data_comparison_config_loading_reads_data_source_and_cases(tmp_path: Path) -> None:
     config_path = tmp_path / "real_data_comparison.json"
     config_path.write_text(
@@ -470,6 +544,26 @@ def test_format_real_data_comparison_results_includes_data_summary() -> None:
 
     assert '"symbol": "BTC/USDT"' in rendered
     assert '"results"' in rendered
+
+
+def test_load_real_data_comparison_config_reads_external_signal_series_comparison_example() -> None:
+    data_source, cases = load_real_data_comparison_config("config/real_data_external_signal_series_comparison.example.json")
+
+    assert data_source["data_source"]["symbol"] == "BTC/USDT"
+    assert [case["name"] for case in cases] == [
+        "matching_low",
+        "matching_baseline",
+        "matching_high",
+        "blended_s07_t03_low",
+        "blended_s07_t03_baseline",
+        "blended_s07_t03_high",
+        "blended_s05_t05_low",
+        "blended_s05_t05_baseline",
+        "blended_s05_t05_high",
+        "blended_s03_t07_low",
+        "blended_s03_t07_baseline",
+        "blended_s03_t07_high",
+    ]
 
 
 def test_market_data_cli_main_prints_summary(capsys: pytest.CaptureFixture[str]) -> None:

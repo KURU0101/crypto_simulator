@@ -11,6 +11,7 @@ comparison example には `threshold_with_cost` も含め、低利益戦略で�
 `real_data_comparison.example.json` はローカル OHLCV CSV から returns を生成して comparison に渡す例です。`data_sources.symbols[*].ohlcv_csv_path` で入力 CSV を指定し、各 case には `returns` を書かず strategy パラメータだけを持たせます。`python3 scripts/run_real_data_comparisons.py --config config/real_data_comparison.example.json --symbol ETH/USDT` のように銘柄を切り替えられます。
 OHLCV からの returns は close-to-close で計算し、生 OHLCV を simulate に直接渡さない構成を維持します。
 実データ comparison は `python3 scripts/run_real_data_comparisons.py --config config/real_data_comparison.example.json` で確認できます。
+`real_data_external_signal_series_comparison.example.json` は external signal の consumption series 差分を比較する 12 ケースの例です。matching 3 threshold と、blended 3 weight x 3 threshold を同じ real-data returns 上で比較できます。
 `pseudo_realtime_replay.example.json` は元 OHLCV CSV をワークCSVへ1行ずつ追記し、各 tick でワークCSV全量を読み直して再評価する例です。複数銘柄設定時は `replay.work_dir` から `<symbol_slug>_replay_work.csv` を自動生成し、`--symbol` で対象銘柄を切り替えられます。`replay.warmup_rows` が起動直後に判断しない行数です。
 疑似リアルタイム再生は `python3 scripts/run_pseudo_realtime_replay.py --config config/pseudo_realtime_replay.example.json` で確認できます。
 `python3 scripts/summarize_market_data.py --config config/real_data_comparison.example.json` を使うと、設定済み銘柄ごとの OHLCV 点数と returns 件数を要約できます。

@@ -1,0 +1,22 @@
+{
+  "run_id": "run_20240101_013000",
+  "signal_type": "news",
+  "source": "manual_compare_sample",
+  "started_at": "2024-01-01T01:25:00Z",
+  "ended_at": "2024-01-01T01:30:00Z",
+  "status": "completed",
+  "fetched_item_count": 1,
+  "normalized_success_count": 1,
+  "validation_failure_count": 0,
+  "saved_record_count": 1,
+  "duplicate_count": 0,
+  "topic_distribution": {
+    "policy": 2
+  },
+  "symbol_distribution": {
+    "BTCUSDT": 1
+  },
+  "saved_paths": {
+    "summary": "data/external_signal_compare/news_signals/manual_compare_sample/run_20240101_033000/summary.json"
+  }
+}

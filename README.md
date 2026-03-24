@@ -40,6 +40,7 @@ python3 scripts/run_simulation.py --config config/simulation.example.json
 ```bash
 source .venv/bin/activate
 python3 scripts/run_real_data_comparisons.py --config config/real_data_comparison.example.json
+python3 scripts/run_real_data_comparisons.py --config config/real_data_external_signal_series_comparison.example.json
 ```
 
 疑似リアルタイム再生の最小実行例:
