@@ -118,15 +118,16 @@ external signal 周辺テストの考え方:
 ### 現在の全体状況（要約）
 
 - 事実:
-  - 現在は「研究用の実行基盤を固める前段」であり、本格的な外部取得・simulation 実行・comparison 実行にはまだ入っていない
-  - 直近では `matching_baseline_exit_relaxed` の最小改善を入れた後、複数期間 × 複数パラメータ検証に向けた dry-run 基盤を段階的に実装していた
-  - 現在の主成果は `periods.csv` / `grids.csv` から run directory、`manifest.csv`、`results_index.csv`、`acquisition_manifest.csv`、`case_acquisition_links.csv`、`unresolved_acquisitions.csv` を生成できること
-  - 共有 cache metadata 実体は `var/cache/external_signals/cache_metadata.csv` に固定され、run 側はその snapshot を保持する構造まで完了している
+  - 現在は、研究用実行基盤の `A2 / B2 / C3` の最小実装が完了した段階である
+  - A2 により shared truth は `var/cache/external_signals/shared_state.sqlite3` に移行済みである
+  - B2 により lease / heartbeat / stale reclaim / 1回限定 auto retry を含む shared state 操作が実装済みである
+  - C3 により、run snapshot は監査・再現用、実行判断は最新 shared truth 優先という境界がコード上で成立している
+  - 直近では `src/trade_simulator/research_manifest.py` に 1 acquisition の最小取得オーケストレーション入口を追加し、shared truth 優先で `claim -> fetch(stub) -> completed|failed` まで通せるようにした
 - 方針:
-  - 目的に対する現在位置は「取得前の最終 dry-run レイヤをほぼ固めた段階」
-  - 次の自然な段階は、shared cache metadata を使って acquisition 1件を claim / 完了 / 失敗へ更新する取得前提の最小フローを実装すること
+  - 目的に対する現在位置は「shared state 境界と単一 acquisition 実行導線の最小骨格が揃った段階」である
+  - 次の自然な段階は、fetch stub を source family 別の実取得境界へ差し替え、run 実行記録を必要最小限で残すこと
 - 推測:
-  - 取得本体に入る前に、shared metadata の排他や stale `running` 回収方針を決める必要が高い
+  - 次に複数 acquisition の batch 実行へ進む前に、単一 acquisition の実取得責務と run 側記録責務をもう一段明確にする可能性が高い
 
 ### 現在の構造・前提（確定事項）
 
@@ -146,94 +147,100 @@ external signal 周辺テストの考え方:
   - `error_code` は `validation_error`, `runtime_error`, `internal_error` と空欄だけを許容する
   - acquisition 単位は `source_family × symbol × period_signature` をベースに `cache_key` を作る
   - `source_family` の現行 allowed values は `news`, `sns`
-  - shared cache metadata の保存先は `var/cache/external_signals/cache_metadata.csv` に固定済み
-  - run directory 側の `cache_metadata.csv` は shared metadata の snapshot であり、再利用の実体ではない
+  - shared truth の保存先は `var/cache/external_signals/shared_state.sqlite3` に固定済みである
+  - `shared_cache_entries` は `shared_state_v2` schema で、lease / heartbeat / retry 列を持つ
+  - run directory 側の `cache_metadata.csv` は shared truth の run-start snapshot であり、再利用の実体ではない
+  - `unresolved_acquisitions.csv` は run-start 時点の判定記録であり、実行直前の claim 可否判断には使わない
+  - `orchestrate_research_acquisition()` は `decision_source="shared_truth"` 以外を拒否し、shared truth を再確認してから claim を試みる
+  - B2 の stale 判定主軸は `lease_expires_at` であり、`lease_expires_at < now` のときだけ stale とみなす
+  - `failed` は原則 stop であり、`retryable=1` かつ `auto_retry_count=0` の場合のみ 1回だけ自動再 claim できる
 - 制約:
   - `simulate` の入出力契約を変えない
   - I/O とロジックを混ぜない
   - external signal の責務分離を壊さない
   - 研究用 dry-run 基盤を comparison / feature / simulate 層へ侵食させない
-  - まだ外部取得本体、cache 本体保存、bundle 生成、simulation 実行、comparison 実行、並列取得は行わない
+  - run snapshot と shared truth の境界を壊さない
+  - claim / skip / retry / stale reclaim の判断を run snapshot ではなく shared truth で行う
+  - まだ外部取得本体の本格実装、cache 本体保存、bundle 生成、simulation 実行、comparison 実行、並列取得は行わない
 
 ### 進行中の内容
 
 - 事実:
   - dry-run manifest generator は実装済みで、`periods.csv` と `grids.csv` から run directory 一式を出力できる
-  - `acquisition_manifest.csv` は `source_family × symbol × period` 単位で生成済み
-  - `case_acquisition_links.csv` により case と acquisition の依存が分離済み
-  - `cache_metadata.csv` の schema は固定済みで、shared metadata repository の `load / validate / find / upsert / status update / save` が実装済み
-  - acquisition 状態遷移は `pending -> running -> completed|failed` のみ許容し、それ以外はエラーに固定済み
-  - `unresolved_acquisitions.csv` は shared metadata を参照して生成される
+  - `acquisition_manifest.csv` は `source_family × symbol × period` 単位で生成済みである
+  - `case_acquisition_links.csv` により case と acquisition の依存が分離済みである
+  - shared state repository には `claim / heartbeat / complete / fail / stale reclaim` が実装済みである
+  - `generate_research_manifest_run()` は SQLite shared truth を読み、`run_dir/cache_metadata.csv` と `unresolved_acquisitions.csv` を snapshot として出力する
+  - `orchestrate_research_acquisition()` は run directory から acquisition identity を取り、shared truth を再確認して claim / skip / completed / failed を処理する
 - 方針:
-  - 次は shared metadata を使った acquisition 1件の最小 claim/update フロー、または取得前の CLI 導線追加が候補
-  - `running` は unresolved から除外する前提なので、今後は stale `running` の扱いを決める必要がある
+  - 次は C3 の最小入口を足場にして、fetch stub を source family 別の実取得境界へ置き換えるのが自然である
+  - 取得結果を run artifact 側へどう最小記録するかは、shared truth と混ぜずに別責務で設計する
 - 未確定:
-  - `running` の TTL や回収条件
-  - 共有 metadata 更新時のロック方針
-  - 取得失敗後の retry 方針
+  - 実 fetch 後の保存物をどの単位で run 側に残すか
+  - 複数 acquisition 実行時の run-level orchestration 入口をどこに置くか
+  - run 側の execution log を追加するか、summary ベースで済ませるか
 
 ### 重要な整理事項
 
 - 事実:
-  - `matching_baseline_exit_relaxed` は sample 上で baseline より改善したが、一般化検証はまだ未着手
-  - 現在の開発重心は strategy 改善そのものではなく、複数期間 × 複数パラメータ検証を安全に回すための研究用基盤整備に移っている
-  - `project_context.md` の前回 handoff は古い strategy planning 段階の記述だったため、今回更新が必要になった
   - `cache_key` は `source_family + symbol + period_signature + input_schema_version + cache_key_version` を元に生成する first usable version で固定済み
-  - shared metadata と run snapshot の役割分離は完了している
+  - A2 により旧 shared CSV は truth として廃止済みである
+  - B2 により shared state schema は `shared_state_v2` へ拡張済みである
+  - C3 により `metadata.json` と CLI 出力に `shared_state_role` / `cache_metadata_snapshot_role` / `unresolved_acquisitions_role` が入る
+  - C3 の最小 orchestrator は run snapshot を根拠に claim 判定せず、shared truth を再確認する
 - 注意点:
-  - `run_dir/cache_metadata.csv` を shared metadata の実体と誤解しないこと
-  - `unresolved_acquisitions.csv` は shared metadata snapshot を見て作る run 固有の判断結果であり、shared 実体ではない
-  - `running` は未完了ではあるが、unresolved には含めない
-  - `pending` と `failed` と不存在だけが unresolved に残る
+  - `run_dir/cache_metadata.csv` は audit / repro 用 snapshot であり、runtime truth ではない
+  - `unresolved_acquisitions.csv` は run-start 判定記録であり、実取得可否の最終根拠ではない
+  - `running` は unresolved から除外されるが、実行時には lease 状態を shared truth で再確認する
+  - fetch はまだ stub であり、外部 source 実装が入ったわけではない
 - 不明:
-  - 今後 shared metadata を run ごとにロックするのか、acquisition 単位でロックするのかは未実装
+  - 実 source 実装をどの module 境界で差し込むかはまだ固定していない
 
 ### スコープ管理
 
 - 今やること:
-  - shared cache metadata を前提に acquisition 1件の最小更新フローへ進める
-  - 取得前提の state machine と snapshot の整合を壊さないように保つ
-  - 研究用 dry-run 基盤の仕様を先に固める
+  - 単一 acquisition の C3 導線を土台に、source family 別の実 fetch 境界を差し込む
+  - run 実行記録を shared truth と分離したまま最小追加する
+  - batch 化や並列化の前に、単一 acquisition 実行の責務を明確に保つ
 - 今はやらないこと:
-  - 外部 API 取得本体
-  - cache 本体データ保存
-  - bundle 生成
+  - A2/B2 のリファクタリング
+  - snapshot への lease 情報追加
+  - source family 実装の大規模拡張
+  - 並列取得
+  - 大規模 batch 実行
   - simulate 実行
   - comparison 実行
-  - summary 集計
-  - 並列取得
-  - retry 実装
-  - strategy 改善の追加実装を再開すること
+  - retry policy の高度化
+  - shared state 周辺の大掃除
 
 ### 次セッションでのタスク候補
 
 - 最も自然に進む次の作業:
-  - acquisition 1件に対して shared cache metadata を `pending -> running -> completed|failed` へ更新する取得前処理の最小導線を CLI 付きで追加する
-  - 更新後の shared metadata を見て、新しい run が unresolved を再計算できることを通しで確認する
+  - `fetch_acquisition_payload()` の stub を `news` / `sns` の実取得境界へ差し替える
+  - orchestration 結果を run 側に最小記録する仕組みを、shared truth と分離して追加する
 - 他に考えられる選択肢:
-  - shared metadata の lock file 方針だけ先に決める
-  - stale `running` 回収や手動解除コマンドの設計から入る
+  - 複数 acquisition を順次実行する batch 入口を追加する
+  - acquisition 実行結果を summary だけ残すか、attempt log を残すかを先に決める
   - 推測:
-    - acquisition claim 用の小さな CLI を先に作る方が、取得本体より先に状態遷移の破綻を検出しやすい
+    - source family 別 fetch 境界を先に作った方が、batch 導線よりも責務分離を保ちやすい
 
 ### 未確定事項 / 論点
 
 - 未確定:
-  - shared metadata 更新時の排他方式
-  - stale `running` の定義と回収手段
-  - `failed` を次 run で自動再取得対象にするだけで十分か
-  - acquisition 実行ログを shared metadata と分けるか同一 run 内で持つか
+  - 実 fetch 成功時に何を shared truth に保存し、何を run 側に残すか
+  - `orchestrate_research_acquisition()` を CLI 化するか、別の batch CLI からだけ呼ぶか
+  - `failed` の error code と retryable 判定を source family 実装側でどこまで揃えるか
 - 論点:
-  - shared metadata の更新 API を CLI 中心にするか、関数呼び出し中心にするか
-  - `pending -> completed` を今後も禁止し続けるか
-  - `running` を unresolved から除外する現在ルールに TTL を組み合わせるか
+  - run 側 execution record を `results_index.csv` に寄せるか、別 artifact を作るか
+  - batch 実行時に unresolved snapshot を入力候補として使うか、毎回 acquisition_manifest 全体を見るか
+  - fetch stub の差し替え境界を `research_manifest.py` 内に置き続けるか、別 module に分けるか
 
 ### リスク / 懸念
 
 - 事実:
-  - shared metadata は現在 CSV 全体読み書きの最小実装であり、並列更新には未対応
-  - `running` を unresolved から除外したため、異常終了時に stale 状態が残ると取得が止まる可能性がある
-  - run snapshot と shared 実体の差分が大きくなると、後から見たときに「なぜ unresolved だったか」を見誤りやすい
+  - fetch はまだ stub なので、実運用の取得品質や source ごとの差分吸収は未着手である
+  - `orchestrate_research_acquisition()` は 1 acquisition 前提であり、run 全体の順次実行や観測記録までは担っていない
+  - run snapshot と shared truth の差分が大きくなると、後から見たときに「その run が何を見ていたか」と「実際にどう動いたか」を別記録で追う必要がある
 - 推測:
-  - 取得本体を先に作るより、lock と stale `running` 対策を先に決めないと将来の再実行で詰まりやすい
-  - strategy 改善タスクへ早く戻りすぎると、研究用実行基盤の土台が中途半端なままになり、複数期間検証で手戻りが増える
+  - 次に batch 実行へ進むと、run 記録責務を先に決めておかないと shared truth 更新と run 記録が混ざりやすい
+  - source family 実装を急ぎすぎると、C3 の責務分離より先に I/O が膨らみ、後で整理コストが増える
