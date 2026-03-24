@@ -118,165 +118,108 @@ external signal 周辺テストの考え方:
 ### 現在の全体状況（要約）
 
 - 事実:
-  - 現在は、研究用実行基盤の `A2 / B2 / C3` 最小実装に続く shared state 周辺リファクタリングが完了した段階である
-  - A2 により shared truth は `var/cache/external_signals/shared_state.sqlite3` に移行済みである
-  - B2 により lease / heartbeat / stale reclaim / 1回限定 auto retry を含む shared state 操作が実装済みである
-  - C3 により、run snapshot は監査・再現用、実行判断は最新 shared truth 優先という境界がコード上で成立している
-  - 直近では `src/trade_simulator/research_manifest.py` の shared state 周辺を整理し、旧 shared CSV helper 群の不要コード削除、shared state 更新 API の責務整理、`updated_at` と heartbeat/lease の意味整理を行った
+  - 現在は、market data reuse 導線、単一 case runner、複数 period × 複数 case batch runner までが実装済みの段階である
+  - batch runner は `1 period × 1 case = 1 row` で CSV を出力し、最小 JSON summary も返す
+  - 直近で行っていたことは、次の正式タスク 2 件だけにスコープを絞った実装・実行計画の整理である
+  - 正式タスクは「1. 今の runner で本当に大量ケースを回せるようにする」「2. 結果テーブルだけ DB 化する」の 2 件に限定されている
 - 方針:
-  - 目的に対する現在位置は「shared state の責務境界と単一 acquisition 実行導線の最小骨格が揃い、周辺の曖昧さを一度解消した段階」である
-  - 次の自然な段階は、fetch stub を source family 別の実取得境界へ差し替え、run 実行記録を必要最小限で残すことである
+  - 目的に対する現在位置は「最小 batch runner は動くが、大量ケースを安全に流す実行入口と、結果 DB 保存はまだ未実装」という段階である
+  - 次の実作業は、未定義タスクを増やさず、上記 2 件だけに集中する
 - 推測:
-  - 次に複数 acquisition の batch 実行へ進む前に、単一 acquisition の実取得責務と run 側記録責務をもう一段明確にする可能性が高い
+  - 推測として、次のセッションでは batch runner を period 単位 / case チャンク単位の逐次処理へ寄せ、結果保存を DB 主体に切り替えるのが自然である
 
 ### 現在の構造・前提（確定事項）
 
 - 事実:
-  - `simulate` は `returns`、`entry_signals`、`exit_signals` を受ける純粋な評価器として維持する
-  - trading path は `OHLCV -> returns -> signals -> simulate -> comparison / replay / live decision`
-  - external signal path は `fetch -> adapter -> normalize -> save -> observe`
-  - 研究用の新規実装は `src/trade_simulator/research_manifest.py` とその CLI に閉じ、既存 CLI の置き換えにはしない
-  - `period_signature`、`grid_signature`、`case_signature` は役割分離済みで、`note` や `enabled` など非本質項目は signature から除外する
-  - CSV null 仕様は固定済み
-  - 空欄は `null`
-  - 数値 `0` はゼロ値
-  - 文字列 `"null"` は禁止
-  - 必須数値列の空欄は validation error
-  - optional 数値列の空欄は `null`
-  - `results_index.csv` の status は `pending`, `running`, `completed`, `failed` に固定済み
-  - `error_code` は `validation_error`, `runtime_error`, `internal_error` と空欄だけを許容する
-  - acquisition 単位は `source_family × symbol × period_signature` をベースに `cache_key` を作る
-  - `source_family` の現行 allowed values は `news`, `sns`
-  - shared truth の保存先は `var/cache/external_signals/shared_state.sqlite3` に固定済みである
-  - `shared_cache_entries` は `shared_state_v2` schema で、lease / heartbeat / retry 列を持つ
-  - `updated_at` は shared truth の行更新時刻であり、stale 判定そのものには使わない
-  - stale 判定の主軸は `lease_expires_at` であり、heartbeat の最新時刻は `last_heartbeat_at` で表す
-  - run directory 側の `cache_metadata.csv` は shared truth の run-start snapshot であり、再利用の実体ではない
-  - `unresolved_acquisitions.csv` は run-start 時点の判定記録であり、実行直前の claim 可否判断には使わない
-  - `orchestrate_research_acquisition()` は `decision_source="shared_truth"` 以外を拒否し、shared truth を再確認してから claim を試みる
-  - `claim / heartbeat / complete / fail` が shared state の正規の状態遷移入口であり、曖昧な汎用 status 更新 API は削除済みである
-  - `cache_metadata.csv` は snapshot 出力としてのみ残し、旧 shared CSV を truth として更新する helper は削除済みである
-  - stale 判定は `lease_expires_at < now` のときだけ成立する
-  - `failed` は原則 stop であり、`retryable=1` かつ `auto_retry_count=0` の場合のみ 1回だけ自動再 claim できる
+  - `simulate` は純粋関数であり、`returns`、`entry_signals`、`exit_signals` を受ける
+  - comparison の責務は case 実行と summary 生成に限定し、I/O、fetch、cache、保存は持たせない
+  - market data reuse は external signal 系と分離した別 DB を runtime truth として使う
+  - market data の primary artifact は normalized OHLCV CSV であり、returns は primary artifact ではない
+  - completed 更新条件は「OHLCV CSV 保存成功」「保存済み CSV 再読込成功」「最小妥当性確認成功」の 3 条件である
+  - 単一 case runner は、保存済みまたは reuse された OHLCV から returns を生成し、comparison の既存責務だけを使って end-to-end 評価する
+  - batch runner は、period ごとに market data 解決を 1 回、returns 生成を 1 回だけ行い、その returns を同一 period 配下の複数 case で共有する
+  - batch CSV の粒度は `1 period × 1 case` に固定済みである
+  - period 失敗時は、その period 配下の全 case に failed row を出し、他 period は続行する
+  - 1 case 失敗では全体停止せず、failed row を保存して続行する
 - 制約:
-  - `simulate` の入出力契約を変えない
-  - I/O とロジックを混ぜない
-  - external signal の責務分離を壊さない
-  - 研究用 dry-run 基盤を comparison / feature / simulate 層へ侵食させない
-  - run snapshot と shared truth の境界を壊さない
-  - claim / skip / retry / stale reclaim の判断を run snapshot ではなく shared truth で行う
-  - まだ外部取得本体の本格実装、cache 本体保存、bundle 生成、simulation 実行、comparison 実行、並列取得は行わない
+  - comparison / simulate の責務を増やしてはいけない
+  - runtime truth と market data reuse の既存方針を崩してはいけない
+  - OHLCV artifact と market data shared truth の全面再設計は今回の正式タスク外である
+  - 今回 DB 化するのは結果だけである
+  - `period × case` の全件を一括でメモリ展開してはいけない
+  - 一度にメモリへ載せる単位を明示し、結果は逐次保存する必要がある
 
 ### 進行中の内容
 
 - 事実:
-  - dry-run manifest generator は実装済みで、`periods.csv` と `grids.csv` から run directory 一式を出力できる
-  - `acquisition_manifest.csv` は `source_family × symbol × period` 単位で生成済みである
-  - `case_acquisition_links.csv` により case と acquisition の依存が分離済みである
-  - shared state repository には `claim / heartbeat / complete / fail / stale reclaim` が実装済みである
-  - `generate_research_manifest_run()` は SQLite shared truth を読み、`run_dir/cache_metadata.csv` と `unresolved_acquisitions.csv` を snapshot として出力する
-  - `orchestrate_research_acquisition()` は run directory から acquisition identity を取り、shared truth を再確認して claim / skip / completed / failed を処理する
-  - shared state 周辺リファクタは完了しており、関連テストは `337 passed` で通過済みである
-- 方針:
-  - 次は C3 の最小入口を足場にして、fetch stub を source family 別の実取得境界へ置き換えるのが自然である
-  - 取得結果を run artifact 側へどう最小記録するかは、shared truth と混ぜずに別責務で設計する
-- 未確定:
-  - 実 fetch 後の保存物をどの単位で run 側に残すか
-  - 複数 acquisition 実行時の run-level orchestration 入口をどこに置くか
-  - run 側の execution log を追加するか、summary ベースで済ませるか
+  - 進行中の内容は、正式タスク 2 件についての実装・実行計画整理までであり、まだ実装には着手していない
+  - ステップ1は「今の runner で大量ケースを回せるようにする」ことで、period ごとの market data 解決と returns 共有は維持しつつ、全件メモリ展開を避ける実行入口が必要である
+  - ステップ2は「結果テーブルだけ DB 化する」ことで、run 単位メタ情報と `1 period × 1 case` 結果行を SQLite へ逐次保存する想定である
+- 完了:
+  - 完了しているのは計画整理までである
+- 次にやる予定:
+  - 次はステップ1の実装として、batch 実行の入力展開と保存を period 単位 / case チャンク単位へ寄せる
+  - その後にステップ2として、結果 DB を追加し、CSV と DB の関係を整理する
 
 ### 重要な整理事項
 
 - 事実:
-  - `cache_key` は `source_family + symbol + period_signature + input_schema_version + cache_key_version` を元に生成する first usable version で固定済み
-  - A2 により旧 shared CSV は truth として廃止済みである
-  - B2 により shared state schema は `shared_state_v2` へ拡張済みである
-  - C3 により `metadata.json` と CLI 出力に `shared_state_role` / `cache_metadata_snapshot_role` / `unresolved_acquisitions_role` が入る
-  - C3 の最小 orchestrator は run snapshot を根拠に claim 判定せず、shared truth を再確認する
-  - 今回のリファクタで、未使用だった旧 shared CSV helper 群と `update_shared_cache_entry_status()` は削除済みである
-  - 今回のリファクタで、shared state 遷移ロジックは内部 helper で共通化した
+  - 最近整理された最重要ポイントは「正式タスクを 2 件に限定し、それ以外を勝手にタスク化しない」方針である
+  - `evaluation_runner` は単発 runner として残すが、大量実行では market data 解決まで含めて period × case 回数だけ呼ばない前提である
+  - 大量実行では `evaluation_runner` から切り出した case 実行 helper だけを再利用する想定である
+  - returns は同一 period 内で 1 回だけ生成し、case ごとに再生成しない
+  - batch CSV の必須カラムには `returns_count` と `price_basis` を含める前提で整理済みである
 - 注意点:
-  - `run_dir/cache_metadata.csv` は audit / repro 用 snapshot であり、runtime truth ではない
-  - `unresolved_acquisitions.csv` は run-start 判定記録であり、実取得可否の最終根拠ではない
-  - `running` は unresolved から除外されるが、実行時には lease 状態を shared truth で再確認する
-  - fetch はまだ stub であり、外部 source 実装が入ったわけではない
-  - `updated_at` は heartbeat 専用列ではなく、claim / heartbeat / complete / fail すべてで更新される行更新時刻である
-  - stale 判定や所有権確認は `updated_at` ではなく `lease_expires_at` / `last_heartbeat_at` / `claimed_by` を見る必要がある
+  - 誤解されやすい点として、今の batch runner が「動く」ことと、「大量ケースを安全に回せる」ことは別である
+  - もう 1 つの注意点として、今回 DB 化の対象は結果だけであり、OHLCV artifact や market data shared truth を DB へ寄せる話ではない
 - 不明:
-  - 実 source 実装をどの module 境界で差し込むかはまだ固定していない
+  - 不明な点は、最終的に CSV を副出力として残すか、DB 主体に切り替えるかの細部実装順である
 
 ### スコープ管理
 
 - 今やること:
-  - 単一 acquisition の C3 導線を土台に、source family 別の実 fetch 境界を差し込む
-  - run 実行記録を shared truth と分離したまま最小追加する
-  - batch 化や並列化の前に、単一 acquisition 実行の責務を明確に保つ
+  - 正式タスク 1: runner を大量ケース向けに寄せる
+  - 正式タスク 2: 結果テーブルだけ DB 化する
+  - period ごとに market data を 1 回だけ解決し、returns を 1 回だけ生成する構造を守る
+  - 結果を逐次保存し、途中失敗でも途中成果を残す
 - 今はやらないこと:
-  - A2/B2/C3 の大規模な再設計
-  - snapshot への lease 情報追加
-  - source family 実装の大規模拡張
-  - 並列取得
-  - 大規模 batch 実行
-  - simulate 実行
-  - comparison 実行
-  - retry policy の高度化
-  - shared state 周辺の大掃除
+  - OHLCV artifact の全面 DB 化
+  - market data shared truth の再設計
+  - research_manifest との全面統合
+  - 並列化の本格導入
+  - acquisition key 同時実行制御の完成
+  - schema_version 運用ルールの完成
+  - 戦略改善
+  - パラメータ最適化
 
 ### 次セッションでのタスク候補
 
 - 最も自然に進む次の作業:
-  - `fetch_acquisition_payload()` の stub を `news` / `sns` の実取得境界へ差し替える
-  - orchestration 結果を run 側に最小記録する仕組みを、shared truth と分離して追加する
+  - ステップ1として、全件一括メモリ展開を避ける batch 実行入口を実装する
+  - 具体的には、period を逐次処理し、period 内 case をチャンクで流し、結果を逐次保存する
 - 他に考えられる選択肢:
-  - 複数 acquisition を順次実行する batch 入口を追加する
-  - acquisition 実行結果を summary だけ残すか、attempt log を残すかを先に決める
+  - ステップ2を先に着手して結果 DB だけを先に作る選択肢はある
 - 推測:
-  - source family 別 fetch 境界を先に作った方が、batch 導線よりも責務分離を保ちやすい
+  - 推測として、先にステップ1を実装して保存単位を安定させてから、ステップ2で DB を主保存へ切り替える方が変更範囲を抑えやすい
 
 ### 未確定事項 / 論点
 
 - 未確定:
-  - 実 fetch 成功時に何を shared truth に保存し、何を run 側に残すか
-  - `orchestrate_research_acquisition()` を CLI 化するか、別の batch CLI からだけ呼ぶか
-  - `failed` の error code と retryable 判定を source family 実装側でどこまで揃えるか
+  - 一度にメモリへ載せる case チャンクサイズを固定値にするか設定値にするかは未確定である
+  - CSV を主保存に残すか、DB を主保存にして CSV を副出力にするかの最終方針は未確定である
+  - result テーブルの一意性を `run_id + period_id + case_name` にするか、別の case 識別子を導入するかは未確定である
 - 論点:
-  - run 側 execution record を `results_index.csv` に寄せるか、別 artifact を作るか
-  - batch 実行時に unresolved snapshot を入力候補として使うか、毎回 acquisition_manifest 全体を見るか
-  - fetch stub の差し替え境界を `research_manifest.py` 内に置き続けるか、別 module に分けるか
+  - batch 実行の入力を `periods.csv + cases/grids` へどこまで自然接続させるか
+  - 再実行時に新しい `run_id` で積み増すだけにするか、部分再開を考慮するか
 
 ### リスク / 懸念
 
 - 事実:
-  - fetch はまだ stub なので、実運用の取得品質や source ごとの差分吸収は未着手である
-  - `orchestrate_research_acquisition()` は 1 acquisition 前提であり、run 全体の順次実行や観測記録までは担っていない
-  - run snapshot と shared truth の差分が大きくなると、後から見たときに「その run が何を見ていたか」と「実際にどう動いたか」を別記録で追う必要がある
+  - 大量ケースを流す段階では、全件を先に巨大配列化するとメモリ制約を破る可能性がある
+  - 今の batch runner は小中規模の逐次実行には使えるが、正式に「大量ケース向け」と言い切るには入力展開と逐次保存の強化が必要である
+- 懸念:
+  - orchestration が肥大化すると責務が崩れやすい
+  - DB と CSV の二重保存が複雑化すると保守が重くなる
+  - 再実行時の run 管理を曖昧にすると分析結果の切り分けが難しくなる
 - 推測:
-  - 次に batch 実行へ進むと、run 記録責務を先に決めておかないと shared truth 更新と run 記録が混ざりやすい
-  - source family 実装を急ぎすぎると、C3 の責務分離より先に I/O が膨らみ、後で整理コストが増える
-
-## Implemented So Far
-
-- フェーズ1の現状調査により、`simulate`、comparison、real-data comparison、research manifest、live runner fetch の実コード上の責務を `できる / できない / 不明` で再整理した
-- market data 用の最小 shared truth を external signal 系と分離した別 DB で持つ方針を確定した
-- 単一 period を明示引数で受け取り、market data acquisition key に基づいて fetch / reuse / normalized OHLCV 保存 / 再読込確認を行う最小導線を追加した
-- primary artifact を returns ではなく normalized OHLCV CSV に固定し、completed 更新条件を「保存成功 + 再読込成功 + 最小妥当性確認成功」に限定した
-- 単一 period × 単一 case について、保存済みまたは reuse された OHLCV から returns を生成し、既存 comparison の `run_case()` / `summarize_case_result()` を使って end-to-end 評価できる最小 runner を追加した
-- 複数 period × 複数 case について、period ごとに market data 解決と returns 生成を 1 回だけ行い、その returns を複数 case で共有して CSV と最小 JSON summary を出す batch runner を追加した
-
-## Explicitly Not Done
-
-- `simulate` 実行との接続
-- period CSV 本格統合
-- 複数 period の重複最適化
-- 大規模 batch orchestration
-- research_manifest との接続拡張
-- 同一 acquisition key の同時実行制御
-- schema_version 運用ルールの確定
-
-## Next Tasks
-
-- market data 再利用導線を evaluation manifest / period CSV 入力へ接続する
-- periods.csv / grids.csv と自然に接続できる入力設計へ拡張する
-- 大規模 batch orchestration と並列化の境界を決める
-- 同一 acquisition key の同時実行制御方針を決める
-- schema_version をどの変更で上げるかの運用ルールを決める
+  - 推測として、period 単位 + case チャンク単位へ処理粒度を固定すれば、メモリ制約と途中保存の両立はしやすい
