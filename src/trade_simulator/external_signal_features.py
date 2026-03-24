@@ -49,6 +49,27 @@ SOURCE_ADJUSTMENT_CONFIGS = {
     },
 }
 
+DEFAULT_FEATURE_OVERRIDE_CONFIG = {
+    "time_weight_profiles": {
+        "default": list(DEFAULT_TIME_WEIGHT_PROFILE),
+        "signal_type": {
+            key: list(value) for key, value in SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES.items()
+        },
+        "source": {
+            key: list(value) for key, value in SOURCE_BASE_TIME_WEIGHT_PROFILES.items()
+        },
+    },
+    "adjustments": {
+        "default_scalar": DEFAULT_ADJUSTMENT_SCALAR,
+        "signal_type": {
+            key: dict(value) for key, value in SIGNAL_TYPE_ADJUSTMENT_CONFIGS.items()
+        },
+        "source": {
+            key: dict(value) for key, value in SOURCE_ADJUSTMENT_CONFIGS.items()
+        },
+    },
+}
+
 
 def _parse_iso_timestamp(value: object, *, field_name: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
@@ -121,31 +142,117 @@ def _read_finite_number(value: object) -> float | None:
     return numeric_value
 
 
-def _resolve_base_time_weight_profile(summary: dict) -> tuple[float, ...]:
+def _build_feature_override_config(overrides: object = None) -> dict:
+    config = {
+        "time_weight_profiles": {
+            "default": _normalize_time_weight_profile(DEFAULT_TIME_WEIGHT_PROFILE),
+            "signal_type": {
+                key: _normalize_time_weight_profile(value) for key, value in SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES.items()
+            },
+            "source": {
+                key: _normalize_time_weight_profile(value) for key, value in SOURCE_BASE_TIME_WEIGHT_PROFILES.items()
+            },
+        },
+        "adjustments": {
+            "default_scalar": DEFAULT_ADJUSTMENT_SCALAR,
+            "signal_type": {
+                key: dict(value) for key, value in SIGNAL_TYPE_ADJUSTMENT_CONFIGS.items()
+            },
+            "source": {
+                key: dict(value) for key, value in SOURCE_ADJUSTMENT_CONFIGS.items()
+            },
+        },
+    }
+    if not isinstance(overrides, dict):
+        return config
+
+    profile_overrides = overrides.get("time_weight_profiles")
+    if isinstance(profile_overrides, dict):
+        default_profile = _normalize_time_weight_profile(profile_overrides.get("default"))
+        if profile_overrides.get("default") is not None:
+            config["time_weight_profiles"]["default"] = default_profile
+        for scope_name in ("signal_type", "source"):
+            scoped_overrides = profile_overrides.get(scope_name)
+            if not isinstance(scoped_overrides, dict):
+                continue
+            for key, value in scoped_overrides.items():
+                if not isinstance(key, str) or not key:
+                    continue
+                config["time_weight_profiles"][scope_name][key] = _normalize_time_weight_profile(value)
+
+    adjustment_overrides = overrides.get("adjustments")
+    if isinstance(adjustment_overrides, dict):
+        default_scalar = _read_finite_number(adjustment_overrides.get("default_scalar"))
+        if default_scalar is not None and default_scalar > 0:
+            config["adjustments"]["default_scalar"] = float(default_scalar)
+        for scope_name in ("signal_type", "source"):
+            scoped_overrides = adjustment_overrides.get(scope_name)
+            if not isinstance(scoped_overrides, dict):
+                continue
+            for key, value in scoped_overrides.items():
+                if not isinstance(key, str) or not key or not isinstance(value, dict):
+                    continue
+                merged_config = dict(config["adjustments"][scope_name].get(key, {}))
+                for field_name in ("metric_name", "base", "alpha", "min", "max"):
+                    if field_name in value:
+                        merged_config[field_name] = value[field_name]
+                config["adjustments"][scope_name][key] = merged_config
+
+    return config
+
+
+def _serialize_feature_override_config(config: dict) -> dict:
+    return {
+        "time_weight_profiles": {
+            "default": list(config["time_weight_profiles"]["default"]),
+            "signal_type": {
+                key: list(value) for key, value in config["time_weight_profiles"]["signal_type"].items()
+            },
+            "source": {
+                key: list(value) for key, value in config["time_weight_profiles"]["source"].items()
+            },
+        },
+        "adjustments": {
+            "default_scalar": config["adjustments"]["default_scalar"],
+            "signal_type": {
+                key: dict(value) for key, value in config["adjustments"]["signal_type"].items()
+            },
+            "source": {
+                key: dict(value) for key, value in config["adjustments"]["source"].items()
+            },
+        },
+    }
+
+
+def _resolve_base_time_weight_profile(summary: dict, resolved_config: dict) -> tuple[tuple[float, ...], str]:
     source = summary.get("source")
-    if isinstance(source, str) and source in SOURCE_BASE_TIME_WEIGHT_PROFILES:
-        return _normalize_time_weight_profile(SOURCE_BASE_TIME_WEIGHT_PROFILES[source])
+    source_profiles = resolved_config["time_weight_profiles"]["source"]
+    if isinstance(source, str) and source in source_profiles:
+        return tuple(source_profiles[source]), "source"
 
     signal_type = summary.get("signal_type")
-    if isinstance(signal_type, str) and signal_type in SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES:
-        return _normalize_time_weight_profile(SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES[signal_type])
+    signal_type_profiles = resolved_config["time_weight_profiles"]["signal_type"]
+    if isinstance(signal_type, str) and signal_type in signal_type_profiles:
+        return tuple(signal_type_profiles[signal_type]), "signal_type"
 
-    return DEFAULT_TIME_WEIGHT_PROFILE
+    return tuple(resolved_config["time_weight_profiles"]["default"]), "default"
 
 
-def _resolve_adjustment_config(summary: dict) -> dict | None:
+def _resolve_adjustment_config(summary: dict, resolved_config: dict) -> tuple[dict | None, str]:
     source = summary.get("source")
-    if isinstance(source, str) and source in SOURCE_ADJUSTMENT_CONFIGS:
-        return dict(SOURCE_ADJUSTMENT_CONFIGS[source])
+    source_configs = resolved_config["adjustments"]["source"]
+    if isinstance(source, str) and source in source_configs:
+        return dict(source_configs[source]), "source"
 
     signal_type = summary.get("signal_type")
-    if isinstance(signal_type, str) and signal_type in SIGNAL_TYPE_ADJUSTMENT_CONFIGS:
-        return dict(SIGNAL_TYPE_ADJUSTMENT_CONFIGS[signal_type])
+    signal_type_configs = resolved_config["adjustments"]["signal_type"]
+    if isinstance(signal_type, str) and signal_type in signal_type_configs:
+        return dict(signal_type_configs[signal_type]), "signal_type"
 
-    return None
+    return None, "default"
 
 
-def _resolve_run_metric(summary: dict, run_metrics_by_run_id: dict[str, dict]) -> object:
+def _resolve_run_metric(summary: dict, run_metrics_by_run_id: dict[str, dict], adjustment_config: dict | None) -> object:
     run_id = summary.get("run_id")
     if not isinstance(run_id, str) or run_id not in run_metrics_by_run_id:
         return None
@@ -154,7 +261,6 @@ def _resolve_run_metric(summary: dict, run_metrics_by_run_id: dict[str, dict]) -
     if not isinstance(run_metrics, dict):
         return None
 
-    adjustment_config = _resolve_adjustment_config(summary)
     if not isinstance(adjustment_config, dict):
         return None
 
@@ -164,27 +270,27 @@ def _resolve_run_metric(summary: dict, run_metrics_by_run_id: dict[str, dict]) -
     return run_metrics.get(metric_name)
 
 
-def _compute_run_adjustment_scalar(summary: dict, run_metrics_by_run_id: dict[str, dict]) -> float:
-    adjustment_config = _resolve_adjustment_config(summary)
+def _compute_run_adjustment_scalar(summary: dict, run_metrics_by_run_id: dict[str, dict], resolved_config: dict) -> tuple[float, str]:
+    adjustment_config, resolution = _resolve_adjustment_config(summary, resolved_config)
     if not isinstance(adjustment_config, dict):
-        return DEFAULT_ADJUSTMENT_SCALAR
+        return float(resolved_config["adjustments"]["default_scalar"]), resolution
 
-    metric_value = _resolve_run_metric(summary, run_metrics_by_run_id)
+    metric_value = _resolve_run_metric(summary, run_metrics_by_run_id, adjustment_config)
     normalized_metric = _read_finite_number(metric_value)
     if normalized_metric is None or normalized_metric < 0:
-        return DEFAULT_ADJUSTMENT_SCALAR
+        return float(resolved_config["adjustments"]["default_scalar"]), resolution
 
     base = _read_finite_number(adjustment_config.get("base"))
     alpha = _read_finite_number(adjustment_config.get("alpha"))
     min_adjustment = _read_finite_number(adjustment_config.get("min"))
     max_adjustment = _read_finite_number(adjustment_config.get("max"))
     if None in (base, alpha, min_adjustment, max_adjustment):
-        return DEFAULT_ADJUSTMENT_SCALAR
+        return float(resolved_config["adjustments"]["default_scalar"]), resolution
     if min_adjustment > max_adjustment:
-        return DEFAULT_ADJUSTMENT_SCALAR
+        return float(resolved_config["adjustments"]["default_scalar"]), resolution
 
     scalar = base + alpha * normalized_metric
-    return max(min_adjustment, min(max_adjustment, scalar))
+    return max(min_adjustment, min(max_adjustment, scalar)), resolution
 
 
 def _apply_weighted_contribution(
@@ -208,6 +314,7 @@ def build_external_feature_timeline(
     symbol: object,
     topics: object = None,
     run_metrics_by_run_id: object = None,
+    feature_overrides: object = None,
 ) -> dict:
     if not isinstance(return_timestamps, list):
         raise TypeError("return_timestamps must be a list")
@@ -223,6 +330,7 @@ def build_external_feature_timeline(
         }
     else:
         raise TypeError("run_metrics_by_run_id must be a dict")
+    resolved_config = _build_feature_override_config(feature_overrides)
 
     parsed_return_timestamps = [
         _parse_iso_timestamp(timestamp, field_name=f"return_timestamps[{index}]")
@@ -273,9 +381,28 @@ def build_external_feature_timeline(
             ignored_summary_count += 1
             continue
 
-        profile = _resolve_base_time_weight_profile(summary)
-        adjustment_scalar = _compute_run_adjustment_scalar(summary, resolved_run_metrics_by_run_id)
+        profile, profile_resolution = _resolve_base_time_weight_profile(summary, resolved_config)
+        adjustment_scalar, adjustment_resolution = _compute_run_adjustment_scalar(
+            summary,
+            resolved_run_metrics_by_run_id,
+            resolved_config,
+        )
         adjusted_profile = tuple(weight * adjustment_scalar for weight in profile)
+        period_contributions = []
+        for offset, adjusted_weight in enumerate(adjusted_profile):
+            target_index = period_index + offset
+            if target_index >= len(parsed_return_timestamps):
+                break
+            period_contributions.append(
+                {
+                    "period_index": target_index,
+                    "timestamp": return_timestamps[target_index],
+                    "weighted_symbol_signal_count": float(matched_symbol_count) * adjusted_weight,
+                    "weighted_topic_signal_count": float(matched_topic_count) * adjusted_weight,
+                    "weighted_matching_signal_count": float(matched_symbol_count + matched_topic_count) * adjusted_weight,
+                    "weighted_matching_run_count": adjusted_weight,
+                }
+            )
         symbol_signal_count[period_index] += matched_symbol_count
         topic_signal_count[period_index] += matched_topic_count
         matching_run_count[period_index] += 1
@@ -302,7 +429,20 @@ def build_external_feature_timeline(
                 "run_id": summary.get("run_id"),
                 "source": summary.get("source"),
                 "signal_type": summary.get("signal_type"),
+                "base_profile": list(profile),
                 "scalar": adjustment_scalar,
+                "adjusted_profile": list(adjusted_profile),
+                "profile_resolution": profile_resolution,
+                "scalar_resolution": adjustment_resolution,
+                "contribution_start_index": period_index,
+                "contribution_start_timestamp": return_timestamps[period_index],
+                "raw_contribution": {
+                    "symbol_signal_count": matched_symbol_count,
+                    "topic_signal_count": matched_topic_count,
+                    "matching_signal_count": matched_symbol_count + matched_topic_count,
+                    "matching_run_count": 1,
+                },
+                "period_contributions": period_contributions,
             }
         )
         aligned_summary_count += 1
@@ -322,23 +462,9 @@ def build_external_feature_timeline(
         "return_timestamps": list(return_timestamps),
         "selected_symbol": normalized_symbol,
         "selected_topics": normalized_topics,
-        "time_weight_profiles": {
-            "default": list(DEFAULT_TIME_WEIGHT_PROFILE),
-            "signal_type": {
-                key: list(value) for key, value in SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES.items()
-            },
-            "source": {
-                key: list(value) for key, value in SOURCE_BASE_TIME_WEIGHT_PROFILES.items()
-            },
-        },
+        "time_weight_profiles": _serialize_feature_override_config(resolved_config)["time_weight_profiles"],
         "adjustments": {
-            "default_scalar": DEFAULT_ADJUSTMENT_SCALAR,
-            "signal_type": {
-                key: dict(value) for key, value in SIGNAL_TYPE_ADJUSTMENT_CONFIGS.items()
-            },
-            "source": {
-                key: dict(value) for key, value in SOURCE_ADJUSTMENT_CONFIGS.items()
-            },
+            **_serialize_feature_override_config(resolved_config)["adjustments"],
             "applied_runs": applied_adjustments,
         },
         "series": {
@@ -443,6 +569,7 @@ def prepare_external_signal_manual_case(
         symbol=symbol,
         topics=external_signal.get("topics"),
         run_metrics_by_run_id=external_signal.get("run_metrics_by_run_id"),
+        feature_overrides=external_signal.get("feature_overrides"),
     )
     entry_signals, exit_signals = build_external_feature_signals(
         feature_timeline,
