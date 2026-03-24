@@ -357,6 +357,7 @@ def test_prepare_cases_with_real_data_returns_builds_manual_signals_from_externa
     assert prepared_cases[0]["entry_signals"] == [False, False, True, False, False]
     assert prepared_cases[0]["exit_signals"] == [False, False, False, True, False]
     assert prepared_cases[0]["external_signal_features"]["series"]["matching_signal_count"] == [0, 0, 2, 0, 0]
+    assert prepared_cases[0]["external_signal_features"]["series"]["weighted_matching_signal_count"] == [0.0, 0.0, 2.0, 0.0, 0.0]
 
 
 def test_prepare_cases_with_real_data_returns_keeps_zeroed_external_signal_series_when_no_summary_matches(monkeypatch) -> None:
@@ -387,6 +388,7 @@ def test_prepare_cases_with_real_data_returns_keeps_zeroed_external_signal_serie
     assert prepared_cases[0]["entry_signals"] == [False, False, False, False, False]
     assert prepared_cases[0]["exit_signals"] == [False, False, False, False, False]
     assert prepared_cases[0]["external_signal_features"]["series"]["matching_signal_count"] == [0, 0, 0, 0, 0]
+    assert prepared_cases[0]["external_signal_features"]["series"]["weighted_matching_signal_count"] == [0.0, 0.0, 0.0, 0.0, 0.0]
 
 
 def test_real_data_comparison_config_loading_reads_data_source_and_cases(tmp_path: Path) -> None:

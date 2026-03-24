@@ -2,9 +2,22 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from datetime import datetime
+from numbers import Real
 
 from trade_simulator.data import normalize_symbol
 from trade_simulator.integrated_observer import scan_saved_signal_summaries
+
+
+DEFAULT_TIME_WEIGHT_PROFILE = (1.0,)
+
+SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES = {
+    "news": (1.0, 0.7, 0.4, 0.2),
+    "sns": (0.4, 1.0, 0.8, 0.4, 0.2),
+}
+
+SOURCE_BASE_TIME_WEIGHT_PROFILES = {
+    "youtube_channel_rss": (0.1, 0.3, 0.8, 1.0, 0.8, 0.5, 0.2),
+}
 
 
 def _parse_iso_timestamp(value: object, *, field_name: str) -> datetime:
@@ -52,6 +65,48 @@ def _normalize_distribution(value: object) -> dict[str, int]:
     return normalized
 
 
+def _normalize_time_weight_profile(value: object) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)):
+        return DEFAULT_TIME_WEIGHT_PROFILE
+
+    normalized_weights: list[float] = []
+    for weight in value:
+        if isinstance(weight, bool) or not isinstance(weight, Real):
+            continue
+        normalized_weight = float(weight)
+        if normalized_weight <= 0:
+            continue
+        normalized_weights.append(normalized_weight)
+
+    return tuple(normalized_weights) or DEFAULT_TIME_WEIGHT_PROFILE
+
+
+def _resolve_base_time_weight_profile(summary: dict) -> tuple[float, ...]:
+    source = summary.get("source")
+    if isinstance(source, str) and source in SOURCE_BASE_TIME_WEIGHT_PROFILES:
+        return _normalize_time_weight_profile(SOURCE_BASE_TIME_WEIGHT_PROFILES[source])
+
+    signal_type = summary.get("signal_type")
+    if isinstance(signal_type, str) and signal_type in SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES:
+        return _normalize_time_weight_profile(SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES[signal_type])
+
+    return DEFAULT_TIME_WEIGHT_PROFILE
+
+
+def _apply_weighted_contribution(
+    weighted_series: list[float],
+    *,
+    start_index: int,
+    profile: tuple[float, ...],
+    base_value: float,
+) -> None:
+    for offset, weight in enumerate(profile):
+        target_index = start_index + offset
+        if target_index >= len(weighted_series):
+            break
+        weighted_series[target_index] += base_value * weight
+
+
 def build_external_feature_timeline(
     return_timestamps: object,
     summaries: object,
@@ -74,6 +129,9 @@ def build_external_feature_timeline(
     symbol_signal_count = [0] * len(parsed_return_timestamps)
     topic_signal_count = [0] * len(parsed_return_timestamps)
     matching_run_count = [0] * len(parsed_return_timestamps)
+    weighted_symbol_signal_count = [0.0] * len(parsed_return_timestamps)
+    weighted_topic_signal_count = [0.0] * len(parsed_return_timestamps)
+    weighted_matching_run_count = [0.0] * len(parsed_return_timestamps)
     aligned_summary_count = 0
     ignored_summary_count = 0
 
@@ -109,27 +167,65 @@ def build_external_feature_timeline(
             ignored_summary_count += 1
             continue
 
+        profile = _resolve_base_time_weight_profile(summary)
         symbol_signal_count[period_index] += matched_symbol_count
         topic_signal_count[period_index] += matched_topic_count
         matching_run_count[period_index] += 1
+        _apply_weighted_contribution(
+            weighted_symbol_signal_count,
+            start_index=period_index,
+            profile=profile,
+            base_value=float(matched_symbol_count),
+        )
+        _apply_weighted_contribution(
+            weighted_topic_signal_count,
+            start_index=period_index,
+            profile=profile,
+            base_value=float(matched_topic_count),
+        )
+        _apply_weighted_contribution(
+            weighted_matching_run_count,
+            start_index=period_index,
+            profile=profile,
+            base_value=1.0,
+        )
         aligned_summary_count += 1
 
     matching_signal_count = [
         symbol_count + topic_count
         for symbol_count, topic_count in zip(symbol_signal_count, topic_signal_count)
     ]
+    weighted_matching_signal_count = [
+        symbol_count + topic_count
+        for symbol_count, topic_count in zip(weighted_symbol_signal_count, weighted_topic_signal_count)
+    ]
     has_activity = [count > 0 for count in matching_signal_count]
+    has_weighted_activity = [count > 0.0 for count in weighted_matching_signal_count]
 
     return {
         "return_timestamps": list(return_timestamps),
         "selected_symbol": normalized_symbol,
         "selected_topics": normalized_topics,
+        "time_weight_profiles": {
+            "default": list(DEFAULT_TIME_WEIGHT_PROFILE),
+            "signal_type": {
+                key: list(value) for key, value in SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES.items()
+            },
+            "source": {
+                key: list(value) for key, value in SOURCE_BASE_TIME_WEIGHT_PROFILES.items()
+            },
+        },
         "series": {
             "symbol_signal_count": symbol_signal_count,
             "topic_signal_count": topic_signal_count,
             "matching_signal_count": matching_signal_count,
             "matching_run_count": matching_run_count,
+            "weighted_symbol_signal_count": weighted_symbol_signal_count,
+            "weighted_topic_signal_count": weighted_topic_signal_count,
+            "weighted_matching_signal_count": weighted_matching_signal_count,
+            "weighted_matching_run_count": weighted_matching_run_count,
             "has_activity": has_activity,
+            "has_weighted_activity": has_weighted_activity,
         },
         "summary": {
             "aligned_summary_count": aligned_summary_count,
@@ -146,8 +242,8 @@ def build_external_feature_signals(
 ) -> tuple[list[bool], list[bool]]:
     if not isinstance(feature_timeline, dict):
         raise TypeError("feature_timeline must be a dict")
-    if not isinstance(entry_count_threshold, int) or entry_count_threshold <= 0:
-        raise ValueError("entry_count_threshold must be a positive int")
+    if isinstance(entry_count_threshold, bool) or not isinstance(entry_count_threshold, Real) or entry_count_threshold <= 0:
+        raise ValueError("entry_count_threshold must be a positive number")
     if not isinstance(exit_after_inactive_periods, int) or exit_after_inactive_periods <= 0:
         raise ValueError("exit_after_inactive_periods must be a positive int")
 
@@ -155,9 +251,9 @@ def build_external_feature_signals(
     if not isinstance(series, dict):
         raise ValueError("feature_timeline must include a series dict")
 
-    matching_signal_count = series.get("matching_signal_count")
+    matching_signal_count = series.get("weighted_matching_signal_count")
     if not isinstance(matching_signal_count, list):
-        raise ValueError("feature_timeline series must include matching_signal_count")
+        raise ValueError("feature_timeline series must include weighted_matching_signal_count")
 
     entry_signals = [False] * len(matching_signal_count)
     exit_signals = [False] * len(matching_signal_count)
@@ -165,10 +261,10 @@ def build_external_feature_signals(
     inactive_streak = 0
 
     for index, count in enumerate(matching_signal_count):
-        if not isinstance(count, int) or count < 0:
-            raise ValueError(f"matching_signal_count[{index}] must be a non-negative int")
+        if isinstance(count, bool) or not isinstance(count, Real) or count < 0:
+            raise ValueError(f"weighted_matching_signal_count[{index}] must be a non-negative number")
 
-        is_active = count >= entry_count_threshold
+        is_active = float(count) >= float(entry_count_threshold)
 
         if not is_in_position and is_active:
             entry_signals[index] = True
