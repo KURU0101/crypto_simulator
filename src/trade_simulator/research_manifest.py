@@ -193,7 +193,7 @@ class ResearchManifestRun:
     acquisition_manifest_path: Path
     case_acquisition_links_path: Path
     cache_metadata_path: Path
-    shared_cache_metadata_path: Path
+    shared_state_db_path: Path
     unresolved_acquisitions_path: Path
     metadata_path: Path
     period_row_count: int
@@ -211,7 +211,10 @@ def _utc_now() -> datetime:
 def _connect_shared_state_db(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    try:
+        connection = sqlite3.connect(path)
+    except (sqlite3.Error, OSError) as exc:
+        raise ValueError(f"failed to open shared state db: {path}") from exc
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -670,6 +673,24 @@ def load_shared_cache_entries(
     ]
 
 
+def build_cache_metadata_snapshot_rows(
+    shared_cache_entries: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    return [
+        _build_cache_metadata_row(
+            cache_key=row["cache_key"],
+            source_family=row["source_family"],
+            symbol=row["symbol"],
+            period_id=row["period_id"],
+            period_signature=row["period_signature"],
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in shared_cache_entries
+    ]
+
+
 def find_shared_cache_entry(
     db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
     *,
@@ -1068,7 +1089,7 @@ def generate_research_manifest_run(
     *,
     source_families: list[str] | tuple[str, ...],
     run_root_dir: str | Path = "var/research_runs",
-    shared_cache_metadata_path: str | Path = DEFAULT_SHARED_CACHE_METADATA_PATH,
+    shared_state_db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
     run_id: str | None = None,
     created_at: datetime | None = None,
 ) -> ResearchManifestRun:
@@ -1088,7 +1109,8 @@ def generate_research_manifest_run(
         created_at=created_at_text,
     )
     case_acquisition_link_rows = build_case_acquisition_links(manifest_rows, acquisition_manifest_rows)
-    shared_cache_metadata_rows = load_shared_cache_metadata_rows(shared_cache_metadata_path)
+    shared_cache_entries = load_shared_cache_entries(shared_state_db_path)
+    shared_cache_metadata_rows = build_cache_metadata_snapshot_rows(shared_cache_entries)
     unresolved_acquisition_rows = build_unresolved_acquisition_rows(acquisition_manifest_rows, shared_cache_metadata_rows)
 
     run_dir = Path(run_root_dir) / resolved_run_id
@@ -1119,7 +1141,7 @@ def generate_research_manifest_run(
         "input_schema_version": INPUT_SCHEMA_VERSION,
         "engine_version": ENGINE_VERSION,
         "source_families": normalize_source_families(source_families),
-        "shared_cache_metadata_path": str(Path(shared_cache_metadata_path)),
+        "shared_state_db_path": str(Path(shared_state_db_path)),
         "periods_file_name": periods_copy_path.name,
         "grids_file_name": grids_copy_path.name,
         "period_row_count": len(period_rows),
@@ -1143,7 +1165,7 @@ def generate_research_manifest_run(
         acquisition_manifest_path=acquisition_manifest_path,
         case_acquisition_links_path=case_acquisition_links_path,
         cache_metadata_path=cache_metadata_path,
-        shared_cache_metadata_path=Path(shared_cache_metadata_path),
+        shared_state_db_path=Path(shared_state_db_path),
         unresolved_acquisitions_path=unresolved_acquisitions_path,
         metadata_path=metadata_path,
         period_row_count=len(period_rows),

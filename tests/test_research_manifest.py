@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from trade_simulator.research_manifest import (
     RESULT_STATUS_RUNNING,
     SHARED_STATE_SCHEMA_VERSION,
     build_case_acquisition_links,
+    build_cache_metadata_snapshot_rows,
     build_initial_cache_metadata_rows,
     build_unresolved_acquisition_rows,
     build_acquisition_cache_key,
@@ -164,7 +166,7 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
     periods_path = tmp_path / "periods.csv"
     grids_path = tmp_path / "grids.csv"
     run_root_dir = tmp_path / "runs"
-    shared_cache_metadata_path = tmp_path / "shared" / "cache_metadata.csv"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
     _write_valid_periods_csv(periods_path)
     _write_valid_grids_csv(grids_path)
 
@@ -173,7 +175,7 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
         grids_path,
         source_families=["news", "sns"],
         run_root_dir=run_root_dir,
-        shared_cache_metadata_path=shared_cache_metadata_path,
+        shared_state_db_path=shared_state_db_path,
         run_id="20260324T010203Z_deadbeef",
     )
 
@@ -212,7 +214,7 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
         "input_schema_version": INPUT_SCHEMA_VERSION,
         "engine_version": ENGINE_VERSION,
         "source_families": ["news", "sns"],
-        "shared_cache_metadata_path": str(shared_cache_metadata_path),
+        "shared_state_db_path": str(shared_state_db_path),
         "periods_file_name": "periods.csv",
         "grids_file_name": "grids.csv",
         "period_row_count": 2,
@@ -475,7 +477,7 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
     periods_path = tmp_path / "periods.csv"
     grids_path = tmp_path / "grids.csv"
     run_root_dir = tmp_path / "runs"
-    shared_cache_metadata_path = tmp_path / "shared" / "cache_metadata.csv"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
     _write_valid_periods_csv(periods_path)
     _write_valid_grids_csv(grids_path)
 
@@ -491,8 +493,8 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
             "sns",
             "--run-root-dir",
             str(run_root_dir),
-            "--shared-cache-metadata-path",
-            str(shared_cache_metadata_path),
+            "--shared-state-db-path",
+            str(shared_state_db_path),
             "--run-id",
             "20260324T010203Z_deadbeef",
         ]
@@ -506,7 +508,7 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
     assert rendered["manifest_case_count"] == 2
     assert rendered["acquisition_manifest_count"] == 4
     assert rendered["unresolved_acquisition_count"] == 4
-    assert rendered["shared_cache_metadata_path"] == str(shared_cache_metadata_path)
+    assert rendered["shared_state_db_path"] == str(shared_state_db_path)
     assert rendered["run_dir"] == str(run_root_dir / "20260324T010203Z_deadbeef")
 
 
@@ -657,6 +659,39 @@ def test_load_shared_cache_entries_returns_empty_list_for_empty_db(tmp_path: Pat
     assert load_shared_cache_entries(db_path) == []
 
 
+def test_build_cache_metadata_snapshot_rows_renders_csv_schema_from_sqlite_rows() -> None:
+    snapshot_rows = build_cache_metadata_snapshot_rows(
+        [
+            {
+                "cache_key": "cache_a",
+                "cache_key_version": CACHE_KEY_VERSION,
+                "source_family": "news",
+                "symbol": "BTCUSD",
+                "period_id": "p_alpha",
+                "period_signature": "sig_alpha",
+                "status": "completed",
+                "created_at": "2026-03-24T00:00:00Z",
+                "updated_at": "2026-03-24T00:01:00Z",
+            }
+        ]
+    )
+
+    assert snapshot_rows == [
+        {
+            "cache_key": "cache_a",
+            "cache_key_version": CACHE_KEY_VERSION,
+            "source_family": "news",
+            "symbol": "BTCUSD",
+            "period_id": "p_alpha",
+            "period_signature": "sig_alpha",
+            "status": "completed",
+            "created_at": "2026-03-24T00:00:00Z",
+            "updated_at": "2026-03-24T00:01:00Z",
+            "schema_version": CACHE_METADATA_SCHEMA_VERSION,
+        }
+    ]
+
+
 def test_shared_cache_entry_upsert_find_and_list_round_trip(tmp_path: Path) -> None:
     db_path = tmp_path / "shared" / "shared_state.sqlite3"
 
@@ -746,8 +781,6 @@ def test_update_shared_cache_entry_status_applies_valid_transition(tmp_path: Pat
 def test_get_shared_state_schema_version_rejects_invalid_meta_value(tmp_path: Path) -> None:
     db_path = tmp_path / "shared" / "shared_state.sqlite3"
     initialize_shared_state_db(db_path)
-
-    import sqlite3
 
     with sqlite3.connect(db_path) as connection:
         connection.execute(
@@ -1175,12 +1208,12 @@ def test_generate_research_manifest_run_uses_shared_metadata_for_unresolved_and_
     periods_path = tmp_path / "periods.csv"
     grids_path = tmp_path / "grids.csv"
     run_root_dir = tmp_path / "runs"
-    shared_cache_metadata_path = tmp_path / "shared" / "cache_metadata.csv"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
     _write_valid_periods_csv(periods_path)
     _write_valid_grids_csv(grids_path)
 
-    shared_rows = upsert_cache_metadata_row(
-        [],
+    upsert_shared_cache_entry(
+        shared_state_db_path,
         cache_key=build_acquisition_cache_key(
             source_family="news",
             symbol="BTCUSD",
@@ -1195,14 +1228,13 @@ def test_generate_research_manifest_run_uses_shared_metadata_for_unresolved_and_
         created_at="2026-03-24T00:00:00Z",
         updated_at="2026-03-24T00:00:00Z",
     )
-    save_shared_cache_metadata_rows(shared_rows, shared_cache_metadata_path)
 
     result = generate_research_manifest_run(
         periods_path,
         grids_path,
         source_families=["news"],
         run_root_dir=run_root_dir,
-        shared_cache_metadata_path=shared_cache_metadata_path,
+        shared_state_db_path=shared_state_db_path,
         run_id="20260324T010203Z_deadbeef",
     )
 
@@ -1212,6 +1244,275 @@ def test_generate_research_manifest_run_uses_shared_metadata_for_unresolved_and_
     assert len(snapshot_rows) == 1
     assert snapshot_rows[0]["status"] == "completed"
     assert [row["acquisition_id"] for row in unresolved_rows] == ["news__ETHUSD__p_minimal"]
+
+
+def test_generate_research_manifest_run_excludes_running_and_keeps_pending_failed_from_sqlite(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    period_rows = load_period_rows(periods_path)
+
+    upsert_shared_cache_entry(
+        shared_state_db_path,
+        cache_key=build_acquisition_cache_key(
+            source_family="news",
+            symbol="BTCUSD",
+            period_signature=period_rows[0]["period_signature"],
+            input_schema_version=INPUT_SCHEMA_VERSION,
+        ),
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature=period_rows[0]["period_signature"],
+        status="running",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:01:00Z",
+    )
+    upsert_shared_cache_entry(
+        shared_state_db_path,
+        cache_key=build_acquisition_cache_key(
+            source_family="news",
+            symbol="ETHUSD",
+            period_signature=period_rows[1]["period_signature"],
+            input_schema_version=INPUT_SCHEMA_VERSION,
+        ),
+        source_family="news",
+        symbol="ETHUSD",
+        period_id="p_minimal",
+        period_signature=period_rows[1]["period_signature"],
+        status="failed",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:02:00Z",
+    )
+
+    result = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    snapshot_rows = list(csv.DictReader(result.cache_metadata_path.open("r", encoding="utf-8", newline="")))
+    unresolved_rows = list(csv.DictReader(result.unresolved_acquisitions_path.open("r", encoding="utf-8", newline="")))
+
+    assert {row["status"] for row in snapshot_rows} == {"running", "failed"}
+    assert [row["acquisition_id"] for row in unresolved_rows] == ["news__ETHUSD__p_minimal"]
+
+
+def test_generate_research_manifest_run_generates_headers_when_shared_db_is_empty(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+
+    result = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    assert result.cache_metadata_path.read_text(encoding="utf-8").splitlines() == [
+        ",".join(
+            [
+                "cache_key",
+                "cache_key_version",
+                "source_family",
+                "symbol",
+                "period_id",
+                "period_signature",
+                "status",
+                "created_at",
+                "updated_at",
+                "schema_version",
+            ]
+        )
+    ]
+
+
+def test_generate_research_manifest_run_allows_zero_unresolved_rows(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    period_rows = load_period_rows(periods_path)
+
+    for period_row in period_rows:
+        upsert_shared_cache_entry(
+            shared_state_db_path,
+            cache_key=build_acquisition_cache_key(
+                source_family="news",
+                symbol=str(period_row["symbol"]),
+                period_signature=str(period_row["period_signature"]),
+                input_schema_version=INPUT_SCHEMA_VERSION,
+            ),
+            source_family="news",
+            symbol=str(period_row["symbol"]),
+            period_id=str(period_row["period_id"]),
+            period_signature=str(period_row["period_signature"]),
+            status="completed",
+            created_at="2026-03-24T00:00:00Z",
+            updated_at="2026-03-24T00:00:00Z",
+        )
+
+    result = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    assert list(csv.DictReader(result.unresolved_acquisitions_path.open("r", encoding="utf-8", newline=""))) == []
+
+
+def test_generate_research_manifest_run_rejects_invalid_shared_state_schema_version(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    initialize_shared_state_db(shared_state_db_path)
+
+    with sqlite3.connect(shared_state_db_path) as connection:
+        connection.execute(
+            "UPDATE shared_state_meta SET value = ? WHERE key = 'schema_version'",
+            ("shared_state_v999",),
+        )
+        connection.commit()
+
+    with pytest.raises(ValueError, match="shared state schema_version must be"):
+        generate_research_manifest_run(
+            periods_path,
+            grids_path,
+            source_families=["news"],
+            run_root_dir=tmp_path / "runs",
+            shared_state_db_path=shared_state_db_path,
+            run_id="20260324T010203Z_deadbeef",
+        )
+
+
+def test_generate_research_manifest_run_rejects_invalid_status_in_shared_db(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    initialize_shared_state_db(shared_state_db_path)
+
+    with sqlite3.connect(shared_state_db_path) as connection:
+        connection.execute("DROP TABLE shared_cache_entries")
+        connection.execute(
+            """
+            CREATE TABLE shared_cache_entries (
+                cache_key TEXT PRIMARY KEY,
+                cache_key_version TEXT NOT NULL,
+                source_family TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                period_id TEXT NOT NULL,
+                period_signature TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO shared_cache_entries (
+                cache_key, cache_key_version, source_family, symbol, period_id, period_signature, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("cache_a", CACHE_KEY_VERSION, "news", "BTCUSD", "p_alpha", "sig_alpha", "queued", "t1", "t1"),
+        )
+        connection.commit()
+
+    with pytest.raises(ValueError, match="status must be one of"):
+        generate_research_manifest_run(
+            periods_path,
+            grids_path,
+            source_families=["news"],
+            run_root_dir=tmp_path / "runs",
+            shared_state_db_path=shared_state_db_path,
+            run_id="20260324T010203Z_deadbeef",
+        )
+
+
+def test_generate_research_manifest_run_rejects_invalid_source_family_in_shared_db(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    initialize_shared_state_db(shared_state_db_path)
+
+    with sqlite3.connect(shared_state_db_path) as connection:
+        connection.execute("DROP TABLE shared_cache_entries")
+        connection.execute(
+            """
+            CREATE TABLE shared_cache_entries (
+                cache_key TEXT PRIMARY KEY,
+                cache_key_version TEXT NOT NULL,
+                source_family TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                period_id TEXT NOT NULL,
+                period_signature TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO shared_cache_entries (
+                cache_key, cache_key_version, source_family, symbol, period_id, period_signature, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("cache_a", CACHE_KEY_VERSION, "podcast", "BTCUSD", "p_alpha", "sig_alpha", "pending", "t1", "t1"),
+        )
+        connection.commit()
+
+    with pytest.raises(ValueError, match="source_family must be one of"):
+        generate_research_manifest_run(
+            periods_path,
+            grids_path,
+            source_families=["news"],
+            run_root_dir=tmp_path / "runs",
+            shared_state_db_path=shared_state_db_path,
+            run_id="20260324T010203Z_deadbeef",
+        )
+
+
+def test_generate_research_manifest_run_rejects_shared_db_open_failure(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    shared_state_db_path = tmp_path / "shared_state_dir"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    shared_state_db_path.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(ValueError, match="failed to open shared state db"):
+        generate_research_manifest_run(
+            periods_path,
+            grids_path,
+            source_families=["news"],
+            run_root_dir=tmp_path / "runs",
+            shared_state_db_path=shared_state_db_path,
+            run_id="20260324T010203Z_deadbeef",
+        )
 
 
 def test_source_family_versions_are_fixed_for_current_supported_families() -> None:
