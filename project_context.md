@@ -253,3 +253,26 @@ external signal 周辺テストの考え方:
 - 推測:
   - 次に batch 実行へ進むと、run 記録責務を先に決めておかないと shared truth 更新と run 記録が混ざりやすい
   - source family 実装を急ぎすぎると、C3 の責務分離より先に I/O が膨らみ、後で整理コストが増える
+
+## Implemented So Far
+
+- フェーズ1の現状調査により、`simulate`、comparison、real-data comparison、research manifest、live runner fetch の実コード上の責務を `できる / できない / 不明` で再整理した
+- market data 用の最小 shared truth を external signal 系と分離した別 DB で持つ方針を確定した
+- 単一 period を明示引数で受け取り、market data acquisition key に基づいて fetch / reuse / normalized OHLCV 保存 / 再読込確認を行う最小導線を追加した
+- primary artifact を returns ではなく normalized OHLCV CSV に固定し、completed 更新条件を「保存成功 + 再読込成功 + 最小妥当性確認成功」に限定した
+
+## Explicitly Not Done
+
+- `simulate` 実行との接続
+- comparison 連携拡張
+- 全結果 CSV 出力
+- 複数 case 一括実行
+- period CSV 本格統合
+- 複数 period の重複最適化
+
+## Next Tasks
+
+- market data 再利用導線を evaluation manifest / period CSV 入力へ接続する
+- period ごとに解決した OHLCV から returns を生成し、既存 comparison 導線へ受け渡す
+- 複数期間 × 複数パラメータの case 実行入口を追加する
+- case 単位の結果 CSV 出力を追加する
