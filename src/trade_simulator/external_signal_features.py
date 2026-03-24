@@ -476,14 +476,51 @@ def _finalize_feature_series(series: dict[str, list[int] | list[float]]) -> dict
     return {
         "symbol_signal_count": list(series["symbol_signal_count"]),
         "topic_signal_count": list(series["topic_signal_count"]),
-        "matching_run_count": list(series["matching_run_count"]),
         "weighted_symbol_signal_count": list(series["weighted_symbol_signal_count"]),
         "weighted_topic_signal_count": list(series["weighted_topic_signal_count"]),
-        "weighted_matching_run_count": list(series["weighted_matching_run_count"]),
     }
 
 
-def _build_matching_consumption_series(series: dict) -> dict:
+def _build_matching_run_series_from_applied_runs(feature_timeline: dict, series_length: int) -> tuple[list[int], list[float]]:
+    matching_run_count = [0] * series_length
+    weighted_matching_run_count = [0.0] * series_length
+
+    adjustments = feature_timeline.get("adjustments")
+    if not isinstance(adjustments, dict):
+        return matching_run_count, weighted_matching_run_count
+
+    applied_runs = adjustments.get("applied_runs")
+    if not isinstance(applied_runs, list):
+        return matching_run_count, weighted_matching_run_count
+
+    for applied_run in applied_runs:
+        if not isinstance(applied_run, dict):
+            continue
+
+        start_index = applied_run.get("contribution_start_index")
+        if isinstance(start_index, int) and 0 <= start_index < series_length:
+            matching_run_count[start_index] += 1
+
+        period_contributions = applied_run.get("period_contributions")
+        if not isinstance(period_contributions, list):
+            continue
+        for contribution in period_contributions:
+            if not isinstance(contribution, dict):
+                continue
+            period_index = contribution.get("period_index")
+            weight = contribution.get("weighted_matching_run_count")
+            if (
+                isinstance(period_index, int)
+                and 0 <= period_index < series_length
+                and not isinstance(weight, bool)
+                and isinstance(weight, Real)
+            ):
+                weighted_matching_run_count[period_index] += float(weight)
+
+    return matching_run_count, weighted_matching_run_count
+
+
+def _build_matching_consumption_series(series: dict, *, matching_run_count: list[int], weighted_matching_run_count: list[float]) -> dict:
     symbol_signal_count = list(series["symbol_signal_count"])
     topic_signal_count = list(series["topic_signal_count"])
     matching_signal_count = [
@@ -502,11 +539,11 @@ def _build_matching_consumption_series(series: dict) -> dict:
         "symbol_signal_count": symbol_signal_count,
         "topic_signal_count": topic_signal_count,
         "matching_signal_count": matching_signal_count,
-        "matching_run_count": list(series["matching_run_count"]),
+        "matching_run_count": list(matching_run_count),
         "weighted_symbol_signal_count": weighted_symbol_signal_count,
         "weighted_topic_signal_count": weighted_topic_signal_count,
         "weighted_matching_signal_count": weighted_matching_signal_count,
-        "weighted_matching_run_count": list(series["weighted_matching_run_count"]),
+        "weighted_matching_run_count": list(weighted_matching_run_count),
         "has_activity": [count > 0 for count in matching_signal_count],
         "has_weighted_activity": [count > 0.0 for count in weighted_matching_signal_count],
     }
@@ -523,17 +560,23 @@ def build_external_signal_consumption_features(feature_timeline: object) -> dict
     required_fields = (
         "symbol_signal_count",
         "topic_signal_count",
-        "matching_run_count",
         "weighted_symbol_signal_count",
         "weighted_topic_signal_count",
-        "weighted_matching_run_count",
     )
     for field_name in required_fields:
         if not isinstance(series.get(field_name), list):
             raise ValueError(f"feature_timeline series must include {field_name}")
 
     # Stage one migration rule: matching remains defined as symbol + topic.
-    consumption_series = _build_matching_consumption_series(series)
+    matching_run_count, weighted_matching_run_count = _build_matching_run_series_from_applied_runs(
+        feature_timeline,
+        len(series["symbol_signal_count"]),
+    )
+    consumption_series = _build_matching_consumption_series(
+        series,
+        matching_run_count=matching_run_count,
+        weighted_matching_run_count=weighted_matching_run_count,
+    )
     return {
         "return_timestamps": list(feature_timeline.get("return_timestamps", [])),
         "selected_symbol": feature_timeline.get("selected_symbol"),
@@ -545,18 +588,6 @@ def build_external_signal_consumption_features(feature_timeline: object) -> dict
                 "weighted": "weighted_symbol_signal_count + weighted_topic_signal_count",
             }
         },
-    }
-
-
-def _build_deprecated_matching_series(series: dict) -> dict:
-    consumption_series = _build_matching_consumption_series(series)
-    return {
-        "matching_signal_count": consumption_series["matching_signal_count"],
-        "matching_run_count": consumption_series["matching_run_count"],
-        "weighted_matching_signal_count": consumption_series["weighted_matching_signal_count"],
-        "weighted_matching_run_count": consumption_series["weighted_matching_run_count"],
-        "has_activity": consumption_series["has_activity"],
-        "has_weighted_activity": consumption_series["has_weighted_activity"],
     }
 
 
@@ -648,7 +679,6 @@ def build_external_feature_timeline(
         "summary": {
             "aligned_summary_count": aligned_summary_count,
             "ignored_summary_count": ignored_summary_count,
-            "deprecated_matching_series": _build_deprecated_matching_series(finalized_series),
         },
     }
 
