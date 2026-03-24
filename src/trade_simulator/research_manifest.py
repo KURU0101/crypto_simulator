@@ -13,6 +13,7 @@ from pathlib import Path
 INPUT_SCHEMA_VERSION = "research_manifest_input_v1"
 ENGINE_VERSION = "research_manifest_dry_run_v1"
 CACHE_KEY_VERSION = "acquisition_cache_v1"
+CACHE_METADATA_SCHEMA_VERSION = "cache_metadata_v1"
 
 RESULT_STATUS_PENDING = "pending"
 RESULT_STATUS_RUNNING = "running"
@@ -41,6 +42,10 @@ ALLOWED_SOURCE_FAMILIES = (
     SOURCE_FAMILY_NEWS,
     SOURCE_FAMILY_SNS,
 )
+# Source-family extension rule:
+# - Add only to ALLOWED_SOURCE_FAMILIES when the new family can reuse the same acquisition identity shape.
+# - Bump CACHE_KEY_VERSION when cache-key inputs or semantics change.
+# - Bump CACHE_METADATA_SCHEMA_VERSION when persisted cache metadata columns or meanings change.
 
 PERIOD_REQUIRED_COLUMNS = (
     "period_id",
@@ -139,6 +144,27 @@ ACQUISITION_MANIFEST_COLUMNS = (
     "updated_at",
 )
 
+CACHE_METADATA_COLUMNS = (
+    "cache_key",
+    "cache_key_version",
+    "source_family",
+    "symbol",
+    "period_id",
+    "period_signature",
+    "status",
+    "created_at",
+    "updated_at",
+    "schema_version",
+)
+
+CASE_ACQUISITION_LINK_COLUMNS = (
+    "run_id",
+    "case_id",
+    "case_signature",
+    "acquisition_id",
+    "cache_key",
+)
+
 
 @dataclass(frozen=True)
 class ResearchManifestRun:
@@ -149,12 +175,16 @@ class ResearchManifestRun:
     manifest_path: Path
     results_index_path: Path
     acquisition_manifest_path: Path
+    case_acquisition_links_path: Path
+    cache_metadata_path: Path
+    unresolved_acquisitions_path: Path
     metadata_path: Path
     period_row_count: int
     grid_row_count: int
     eligible_grid_row_count: int
     manifest_case_count: int
     acquisition_manifest_count: int
+    unresolved_acquisition_count: int
 
 
 def _utc_now() -> datetime:
@@ -267,6 +297,10 @@ def validate_result_status(status: str) -> str:
     return status
 
 
+def validate_acquisition_status(status: str) -> str:
+    return validate_result_status(status)
+
+
 def validate_error_code(*, status: str, error_code: str, error_message: str) -> str:
     if error_code not in ALLOWED_ERROR_CODES:
         raise ValueError(f"error_code must be one of: {', '.join(code or '<empty>' for code in ALLOWED_ERROR_CODES)}")
@@ -278,6 +312,15 @@ def validate_error_code(*, status: str, error_code: str, error_message: str) -> 
     elif error_code or error_message.strip():
         raise ValueError("error_code and error_message must be empty unless status is failed")
     return error_code
+
+
+def _validate_required_columns(rows: list[dict[str, str]], required_columns: tuple[str, ...], *, entity_name: str) -> None:
+    if not rows:
+        return
+
+    missing_columns = [column for column in required_columns if column not in rows[0]]
+    if missing_columns:
+        raise ValueError(f"{entity_name} missing required columns: {', '.join(missing_columns)}")
 
 
 def _canonical_payload(row: dict[str, object], columns: tuple[str, ...]) -> dict[str, object]:
@@ -486,6 +529,41 @@ def build_acquisition_cache_key(
     )
 
 
+def build_initial_cache_metadata_rows() -> list[dict[str, object]]:
+    return []
+
+
+def load_cache_metadata_rows(csv_path: str | Path) -> list[dict[str, str]]:
+    rows = _read_csv_rows(csv_path, required_columns=CACHE_METADATA_COLUMNS, entity_name="cache_metadata")
+    normalized_rows: list[dict[str, str]] = []
+
+    for row in rows:
+        status = validate_acquisition_status(_parse_required_text(row, "status"))
+        schema_version = _parse_required_text(row, "schema_version")
+        cache_key_version = _parse_required_text(row, "cache_key_version")
+        if schema_version != CACHE_METADATA_SCHEMA_VERSION:
+            raise ValueError(f"schema_version must be {CACHE_METADATA_SCHEMA_VERSION}")
+        if cache_key_version != CACHE_KEY_VERSION:
+            raise ValueError(f"cache_key_version must be {CACHE_KEY_VERSION}")
+
+        normalized_rows.append(
+            {
+                "cache_key": _parse_required_text(row, "cache_key"),
+                "cache_key_version": cache_key_version,
+                "source_family": _parse_required_text(row, "source_family"),
+                "symbol": _parse_required_text(row, "symbol"),
+                "period_id": _parse_required_text(row, "period_id"),
+                "period_signature": _parse_required_text(row, "period_signature"),
+                "status": status,
+                "created_at": _parse_required_text(row, "created_at"),
+                "updated_at": _parse_required_text(row, "updated_at"),
+                "schema_version": schema_version,
+            }
+        )
+
+    return normalized_rows
+
+
 def build_acquisition_manifest_rows(
     period_rows: list[dict[str, object]],
     *,
@@ -499,7 +577,7 @@ def build_acquisition_manifest_rows(
 
     for source_family in normalized_source_families:
         for period_row in period_rows:
-            status = validate_result_status(RESULT_STATUS_PENDING)
+            status = validate_acquisition_status(RESULT_STATUS_PENDING)
             cache_key = build_acquisition_cache_key(
                 source_family=source_family,
                 symbol=str(period_row["symbol"]),
@@ -524,6 +602,49 @@ def build_acquisition_manifest_rows(
             )
 
     return acquisition_rows
+
+
+def build_case_acquisition_links(
+    manifest_rows: list[dict[str, object]],
+    acquisition_manifest_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    acquisition_by_period_signature: dict[str, list[dict[str, object]]] = {}
+    for acquisition_row in acquisition_manifest_rows:
+        period_signature = str(acquisition_row["period_signature"])
+        acquisition_by_period_signature.setdefault(period_signature, []).append(acquisition_row)
+
+    link_rows: list[dict[str, object]] = []
+    for manifest_row in manifest_rows:
+        period_signature = str(manifest_row["period_signature"])
+        linked_acquisitions = acquisition_by_period_signature.get(period_signature, [])
+        for acquisition_row in linked_acquisitions:
+            link_rows.append(
+                {
+                    "run_id": manifest_row["run_id"],
+                    "case_id": manifest_row["case_id"],
+                    "case_signature": manifest_row["case_signature"],
+                    "acquisition_id": acquisition_row["acquisition_id"],
+                    "cache_key": acquisition_row["cache_key"],
+                }
+            )
+
+    return link_rows
+
+
+def build_unresolved_acquisition_rows(
+    acquisition_manifest_rows: list[dict[str, object]],
+    cache_metadata_rows: list[dict[str, str]],
+) -> list[dict[str, object]]:
+    completed_cache_keys = {
+        row["cache_key"]
+        for row in cache_metadata_rows
+        if row["status"] == RESULT_STATUS_COMPLETED
+    }
+    return [
+        row
+        for row in acquisition_manifest_rows
+        if row["cache_key"] not in completed_cache_keys
+    ]
 
 
 def _write_csv(path: Path, fieldnames: tuple[str, ...], rows: list[dict[str, object]]) -> None:
@@ -558,6 +679,9 @@ def generate_research_manifest_run(
         source_families=source_families,
         created_at=created_at_text,
     )
+    case_acquisition_link_rows = build_case_acquisition_links(manifest_rows, acquisition_manifest_rows)
+    cache_metadata_rows = build_initial_cache_metadata_rows()
+    unresolved_acquisition_rows = build_unresolved_acquisition_rows(acquisition_manifest_rows, cache_metadata_rows)
 
     run_dir = Path(run_root_dir) / resolved_run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -567,6 +691,9 @@ def generate_research_manifest_run(
     manifest_path = run_dir / "manifest.csv"
     results_index_path = run_dir / "results_index.csv"
     acquisition_manifest_path = run_dir / "acquisition_manifest.csv"
+    case_acquisition_links_path = run_dir / "case_acquisition_links.csv"
+    cache_metadata_path = run_dir / "cache_metadata.csv"
+    unresolved_acquisitions_path = run_dir / "unresolved_acquisitions.csv"
     metadata_path = run_dir / "metadata.json"
 
     shutil.copyfile(Path(periods_csv_path), periods_copy_path)
@@ -574,6 +701,9 @@ def generate_research_manifest_run(
     _write_csv(manifest_path, MANIFEST_COLUMNS, manifest_rows)
     _write_csv(results_index_path, RESULTS_INDEX_COLUMNS, results_index_rows)
     _write_csv(acquisition_manifest_path, ACQUISITION_MANIFEST_COLUMNS, acquisition_manifest_rows)
+    _write_csv(case_acquisition_links_path, CASE_ACQUISITION_LINK_COLUMNS, case_acquisition_link_rows)
+    _write_csv(cache_metadata_path, CACHE_METADATA_COLUMNS, cache_metadata_rows)
+    _write_csv(unresolved_acquisitions_path, ACQUISITION_MANIFEST_COLUMNS, unresolved_acquisition_rows)
 
     metadata = {
         "run_id": resolved_run_id,
@@ -588,6 +718,9 @@ def generate_research_manifest_run(
         "eligible_grid_row_count": len(eligible_grid_rows),
         "manifest_case_count": len(manifest_rows),
         "acquisition_manifest_count": len(acquisition_manifest_rows),
+        "cache_metadata_row_count": len(cache_metadata_rows),
+        "case_acquisition_link_count": len(case_acquisition_link_rows),
+        "unresolved_acquisition_count": len(unresolved_acquisition_rows),
     }
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -599,10 +732,14 @@ def generate_research_manifest_run(
         manifest_path=manifest_path,
         results_index_path=results_index_path,
         acquisition_manifest_path=acquisition_manifest_path,
+        case_acquisition_links_path=case_acquisition_links_path,
+        cache_metadata_path=cache_metadata_path,
+        unresolved_acquisitions_path=unresolved_acquisitions_path,
         metadata_path=metadata_path,
         period_row_count=len(period_rows),
         grid_row_count=len(grid_rows),
         eligible_grid_row_count=len(eligible_grid_rows),
         manifest_case_count=len(manifest_rows),
         acquisition_manifest_count=len(acquisition_manifest_rows),
+        unresolved_acquisition_count=len(unresolved_acquisition_rows),
     )

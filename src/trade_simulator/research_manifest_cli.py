@@ -47,9 +47,13 @@ def main(argv: list[str] | None = None) -> int:
                 "eligible_grid_row_count": run.eligible_grid_row_count,
                 "manifest_case_count": run.manifest_case_count,
                 "acquisition_manifest_count": run.acquisition_manifest_count,
+                "unresolved_acquisition_count": run.unresolved_acquisition_count,
                 "manifest_path": str(run.manifest_path),
                 "results_index_path": str(run.results_index_path),
                 "acquisition_manifest_path": str(run.acquisition_manifest_path),
+                "case_acquisition_links_path": str(run.case_acquisition_links_path),
+                "cache_metadata_path": str(run.cache_metadata_path),
+                "unresolved_acquisitions_path": str(run.unresolved_acquisitions_path),
                 "metadata_path": str(run.metadata_path),
             }
         )
