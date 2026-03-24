@@ -115,72 +115,98 @@ external signal 周辺テストの考え方:
 
 ## Session Handoff
 
-### 今回採用した標準比較セット
+### 現在の全体状況（要約）
 
-- matching:
+- 事実:
+  - external signal 統合後の標準比較セットは確定済みで、戦略改善フェーズに入っている
+  - このセッションでは `matching_baseline` を起点に、次に触るべき改善ポイントを調査した
+  - 実装・設定変更・テスト変更は行わず、計画と判断材料の整理だけを実施した
+- 方針:
+  - 目的は `matching_baseline` を前提に、次の 1 手を `exit / entry 精度 / 補助シグナル` のどれに置くかを確定すること
+  - 現在位置は「改善対象の優先順位を絞り、最小実装案を決めた段階」
+
+### 現在の構造・前提（確定事項）
+
+- 事実:
+  - `simulate` は `returns`、`entry_signals`、`exit_signals` を受ける純粋な評価器として維持する
+  - trading path は `OHLCV -> returns -> signals -> simulate -> comparison / replay / live decision`
+  - external signal path は `fetch -> adapter -> normalize -> save -> observe`
+  - external signal の real-data comparison は標準 8 ケースを前提とする
+  - 現在の主戦略候補は `matching_baseline` で、`weighted_matching_signal_count` + `entry_count_threshold=1.4`
+  - weight は最適化対象ではなく、threshold 境界付近の観測対象として扱う
+- 制約:
+  - `simulate` の入出力契約を変えない
+  - I/O とロジックを混ぜない
+  - external signal の責務分離を壊さない
+  - timeline / consumption_features / matching / blended / observability の責務境界を崩さない
+  - 複数変更を同時に入れず、まずは 1 箇所だけ改善する
+
+### 進行中の内容
+
+- 事実:
+  - `matching_baseline` 周辺のロジック、比較 config、関連テスト、sample 結果の確認は完了した
+  - `matching_baseline`、`matching_low`、`matching_high` の差分は entry ではなく exit index に強く表れていることを確認した
+  - 現 sample では `matching_baseline` の `weighted_matching_signal_count` は `[0.0, 3.0, 2.1, 1.2, 0.6]` で減衰し、`entry_count_threshold=1.4` に対して exit が早く発生している
+- 方針:
+  - 次は exit 改善を最小差分で比較する案を具体化する
+  - 第一候補は `exit_after_inactive_periods` を使った保有期間制御の比較
+
+### 重要な整理事項
+
+- 事実:
+  - 標準比較セットは以下の 8 ケースで固定している
   - `matching_low`
   - `matching_baseline`
   - `matching_high`
-- blended:
   - `blended_s07_t03_low`
   - `blended_s07_t03_baseline`
   - `blended_s05_t05_low`
   - `blended_s05_t05_baseline`
   - `blended_s03_t07_baseline`
+  - 現 sample では threshold が主因で、weight は threshold 境界付近でのみ効く
+  - blended は主戦略ではまだ弱いが、比較対象として残す価値がある
+- 注意点:
+  - `matching_baseline` は比較上の主戦略候補であり、ロジック既定値ではない
+  - 今回の調査結果は current sample 依存の部分があるため、一般化は未確定
+  - 推測:
+    - 別 sample でも同じ exit ボトルネックが再現する可能性は高いが、まだ十分な sample 数ではない
 
-### この 8 ケースを残した理由
+### スコープ管理
+
+- 今やること:
+  - `matching_baseline` を維持したまま、exit だけを改善する最小案を比較できる状態にする
+  - 保有期間の制御が結果に与える影響を、既存比較と同じ見方で検証する
+- 今はやらないこと:
+  - weight 探索
+  - 大規模リファクタ
+  - `simulate` 契約変更
+  - 複数の改善点を同時に入れること
+  - 補助シグナル追加を先行させること
+
+### 次セッションでのタスク候補
+
+- 最も自然に進む次の作業:
+  - exit 改善案を 1 つだけ選び、最小比較ケースとして実装する
+  - 第一候補は `exit_after_inactive_periods=2` 相当の exit persistence を `matching_baseline` 比較に追加すること
+- 他に考えられる選択肢:
+  - entry 精度向上案を比較対象として設計だけ先に切る
+  - sample を 1 本追加して、exit ボトルネック仮説の再現性を先に確認する
+
+### 未確定事項 / 論点
+
+- 未確定:
+  - exit 改善を `exit_after_inactive_periods` のみで行うか、別の利確 / 損切り / 時間制限へ広げるか
+  - current sample の exit ボトルネックが追加 sample でも再現するか
+  - entry 精度改善を exit 改善の次にやるか、sample 拡張を先にやるか
+- 論点:
+  - 保有期間を 1 本伸ばすだけで十分か
+  - price-based exit を external signal manual layer に持ち込まずに比較可能な形へ落とせるか
+
+### リスク / 懸念
 
 - 事実:
-  - current sample では threshold が主因で、weight は threshold 境界付近でだけ効いた
-  - matching は `1.0 / 1.4 / 2.2` の全帯で entry し、blended は high threshold で no-trade に寄った
-- matching を 3 ケース残す理由:
-  - threshold 感度を low / baseline / high で継続監視するため
-  - `matching_baseline` を第一候補に据えても、`1.0` と `2.2` を消すと threshold 主因の監視が弱くなるため
-- blended を 5 ケースに絞る理由:
-  - 主戦略ではないが、threshold 境界付近で weight 差が効く比較対象としては残す価値があるため
-  - `0.7/0.3`, `0.5/0.5`, `0.3/0.7` を low / baseline 帯で最低限追える構成に絞ると、比較軸を増やしすぎずに weight 差を観測できるため
-- 外したケース:
-  - `blended_s07_t03_high`
-  - `blended_s05_t05_high`
-  - `blended_s03_t07_low`
-  - `blended_s03_t07_high`
-- 外した理由:
-  - blended high 群は current sample で no-trade 側に寄りやすく、標準セットで優先監視する意味が薄い
-  - `blended_s03_t07_low` は weight の広がりとしては読めるが、標準セットでは low / baseline の両帯を全 weight で持つ必要はなく、baseline 側の比較価値を優先した
-
-### 現時点の位置づけ
-
-- `matching_baseline`:
-  - `weighted_matching_signal_count` + `entry_count_threshold=1.4`
-  - 現時点の第一候補
-  - ただしロジック既定値ではなく、比較上の主戦略候補
-- blended:
-  - 主軸ではない
-  - threshold 境界付近で weight が効くかを観測する比較対象
-- weight:
-  - 最適化対象ではない
-  - 比較観測対象として保持する
-
-### 今回ロジック本体を変更しなかった理由
-
-- sample 数がまだ少なく、series や threshold の優先順位は比較で見る段階だから
-- `simulate` の純粋性、timeline と consumption_features の責務分離、observability 境界を崩す必要がないから
-- 今回の目的は「標準比較セットの整理」であり、signal 計算ロジックを書き換える段階ではないから
-
-### 今回反映した最小変更
-
-- `config/real_data_external_signal_series_comparison.example.json` を 8 ケース標準セットに整理
-- matching 3 ケースも `consumption_series_name` を明示し、series / threshold / weight の見え方を揃えた
-- docs に以下を反映:
-  - `matching_baseline` が第一候補
-  - ただし既定値固定ではない
-  - blended は比較対象として残す
-  - blended high 群は標準セットから外す
-  - weight は最適化ではなく観測対象
-- tests は config 解釈、case metadata、no-trade summary 形状を確認する最小追加に留めた
-
-### 次に進むなら何を検証するべきか
-
-- sample を 1 本追加して、`matching_baseline` を第一候補とする判断が再現するか
-- low / baseline 帯で残した blended 5 ケースが、別 sample でも比較対象として有効か
-- standard 8 ケースのままで十分か、それとも full comparison 用の別 config を追加すべきか
+  - 現 sample は 1 run summary に依存するため、過学習的な判断になりやすい
+  - exit を緩めると、別 sample では損失の引き延ばしになる可能性がある
+- 推測:
+  - entry 精度改善や補助シグナル導入を先に始めると、threshold 主因という現在の整理を崩して論点が散る可能性が高い
+  - price-based exit を早く入れすぎると、external signal layer と strategy logic の責務が混線しやすい
