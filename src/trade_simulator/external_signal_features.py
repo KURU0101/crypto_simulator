@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from datetime import datetime
+import math
 from numbers import Real
 
 from trade_simulator.data import normalize_symbol
@@ -17,6 +18,35 @@ SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES = {
 
 SOURCE_BASE_TIME_WEIGHT_PROFILES = {
     "youtube_channel_rss": (0.1, 0.3, 0.8, 1.0, 0.8, 0.5, 0.2),
+}
+
+DEFAULT_ADJUSTMENT_SCALAR = 1.0
+
+SIGNAL_TYPE_ADJUSTMENT_CONFIGS = {
+    "news": {
+        "metric_name": "attention_score",
+        "base": 0.8,
+        "alpha": 0.4,
+        "min": 0.6,
+        "max": 1.6,
+    },
+    "sns": {
+        "metric_name": "attention_score",
+        "base": 0.7,
+        "alpha": 0.5,
+        "min": 0.5,
+        "max": 1.8,
+    },
+}
+
+SOURCE_ADJUSTMENT_CONFIGS = {
+    "youtube_channel_rss": {
+        "metric_name": "attention_score",
+        "base": 0.6,
+        "alpha": 0.8,
+        "min": 0.4,
+        "max": 2.0,
+    },
 }
 
 
@@ -81,6 +111,16 @@ def _normalize_time_weight_profile(value: object) -> tuple[float, ...]:
     return tuple(normalized_weights) or DEFAULT_TIME_WEIGHT_PROFILE
 
 
+def _read_finite_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+
+    numeric_value = float(value)
+    if not math.isfinite(numeric_value):
+        return None
+    return numeric_value
+
+
 def _resolve_base_time_weight_profile(summary: dict) -> tuple[float, ...]:
     source = summary.get("source")
     if isinstance(source, str) and source in SOURCE_BASE_TIME_WEIGHT_PROFILES:
@@ -91,6 +131,60 @@ def _resolve_base_time_weight_profile(summary: dict) -> tuple[float, ...]:
         return _normalize_time_weight_profile(SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES[signal_type])
 
     return DEFAULT_TIME_WEIGHT_PROFILE
+
+
+def _resolve_adjustment_config(summary: dict) -> dict | None:
+    source = summary.get("source")
+    if isinstance(source, str) and source in SOURCE_ADJUSTMENT_CONFIGS:
+        return dict(SOURCE_ADJUSTMENT_CONFIGS[source])
+
+    signal_type = summary.get("signal_type")
+    if isinstance(signal_type, str) and signal_type in SIGNAL_TYPE_ADJUSTMENT_CONFIGS:
+        return dict(SIGNAL_TYPE_ADJUSTMENT_CONFIGS[signal_type])
+
+    return None
+
+
+def _resolve_run_metric(summary: dict, run_metrics_by_run_id: dict[str, dict]) -> object:
+    run_id = summary.get("run_id")
+    if not isinstance(run_id, str) or run_id not in run_metrics_by_run_id:
+        return None
+
+    run_metrics = run_metrics_by_run_id[run_id]
+    if not isinstance(run_metrics, dict):
+        return None
+
+    adjustment_config = _resolve_adjustment_config(summary)
+    if not isinstance(adjustment_config, dict):
+        return None
+
+    metric_name = adjustment_config.get("metric_name")
+    if not isinstance(metric_name, str) or not metric_name:
+        return None
+    return run_metrics.get(metric_name)
+
+
+def _compute_run_adjustment_scalar(summary: dict, run_metrics_by_run_id: dict[str, dict]) -> float:
+    adjustment_config = _resolve_adjustment_config(summary)
+    if not isinstance(adjustment_config, dict):
+        return DEFAULT_ADJUSTMENT_SCALAR
+
+    metric_value = _resolve_run_metric(summary, run_metrics_by_run_id)
+    normalized_metric = _read_finite_number(metric_value)
+    if normalized_metric is None or normalized_metric < 0:
+        return DEFAULT_ADJUSTMENT_SCALAR
+
+    base = _read_finite_number(adjustment_config.get("base"))
+    alpha = _read_finite_number(adjustment_config.get("alpha"))
+    min_adjustment = _read_finite_number(adjustment_config.get("min"))
+    max_adjustment = _read_finite_number(adjustment_config.get("max"))
+    if None in (base, alpha, min_adjustment, max_adjustment):
+        return DEFAULT_ADJUSTMENT_SCALAR
+    if min_adjustment > max_adjustment:
+        return DEFAULT_ADJUSTMENT_SCALAR
+
+    scalar = base + alpha * normalized_metric
+    return max(min_adjustment, min(max_adjustment, scalar))
 
 
 def _apply_weighted_contribution(
@@ -113,11 +207,22 @@ def build_external_feature_timeline(
     *,
     symbol: object,
     topics: object = None,
+    run_metrics_by_run_id: object = None,
 ) -> dict:
     if not isinstance(return_timestamps, list):
         raise TypeError("return_timestamps must be a list")
     if not isinstance(summaries, list):
         raise TypeError("summaries must be a list")
+    if run_metrics_by_run_id is None:
+        resolved_run_metrics_by_run_id: dict[str, dict] = {}
+    elif isinstance(run_metrics_by_run_id, dict):
+        resolved_run_metrics_by_run_id = {
+            run_id: metrics
+            for run_id, metrics in run_metrics_by_run_id.items()
+            if isinstance(run_id, str)
+        }
+    else:
+        raise TypeError("run_metrics_by_run_id must be a dict")
 
     parsed_return_timestamps = [
         _parse_iso_timestamp(timestamp, field_name=f"return_timestamps[{index}]")
@@ -134,6 +239,7 @@ def build_external_feature_timeline(
     weighted_matching_run_count = [0.0] * len(parsed_return_timestamps)
     aligned_summary_count = 0
     ignored_summary_count = 0
+    applied_adjustments = []
 
     for index, summary in enumerate(summaries):
         if not isinstance(summary, dict):
@@ -168,26 +274,36 @@ def build_external_feature_timeline(
             continue
 
         profile = _resolve_base_time_weight_profile(summary)
+        adjustment_scalar = _compute_run_adjustment_scalar(summary, resolved_run_metrics_by_run_id)
+        adjusted_profile = tuple(weight * adjustment_scalar for weight in profile)
         symbol_signal_count[period_index] += matched_symbol_count
         topic_signal_count[period_index] += matched_topic_count
         matching_run_count[period_index] += 1
         _apply_weighted_contribution(
             weighted_symbol_signal_count,
             start_index=period_index,
-            profile=profile,
+            profile=adjusted_profile,
             base_value=float(matched_symbol_count),
         )
         _apply_weighted_contribution(
             weighted_topic_signal_count,
             start_index=period_index,
-            profile=profile,
+            profile=adjusted_profile,
             base_value=float(matched_topic_count),
         )
         _apply_weighted_contribution(
             weighted_matching_run_count,
             start_index=period_index,
-            profile=profile,
+            profile=adjusted_profile,
             base_value=1.0,
+        )
+        applied_adjustments.append(
+            {
+                "run_id": summary.get("run_id"),
+                "source": summary.get("source"),
+                "signal_type": summary.get("signal_type"),
+                "scalar": adjustment_scalar,
+            }
         )
         aligned_summary_count += 1
 
@@ -214,6 +330,16 @@ def build_external_feature_timeline(
             "source": {
                 key: list(value) for key, value in SOURCE_BASE_TIME_WEIGHT_PROFILES.items()
             },
+        },
+        "adjustments": {
+            "default_scalar": DEFAULT_ADJUSTMENT_SCALAR,
+            "signal_type": {
+                key: dict(value) for key, value in SIGNAL_TYPE_ADJUSTMENT_CONFIGS.items()
+            },
+            "source": {
+                key: dict(value) for key, value in SOURCE_ADJUSTMENT_CONFIGS.items()
+            },
+            "applied_runs": applied_adjustments,
         },
         "series": {
             "symbol_signal_count": symbol_signal_count,
@@ -316,6 +442,7 @@ def prepare_external_signal_manual_case(
         summaries,
         symbol=symbol,
         topics=external_signal.get("topics"),
+        run_metrics_by_run_id=external_signal.get("run_metrics_by_run_id"),
     )
     entry_signals, exit_signals = build_external_feature_signals(
         feature_timeline,
