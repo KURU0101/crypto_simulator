@@ -118,14 +118,14 @@ external signal 周辺テストの考え方:
 ### 現在の全体状況（要約）
 
 - 事実:
-  - 現在は、研究用実行基盤の `A2 / B2 / C3` の最小実装が完了した段階である
+  - 現在は、研究用実行基盤の `A2 / B2 / C3` 最小実装に続く shared state 周辺リファクタリングが完了した段階である
   - A2 により shared truth は `var/cache/external_signals/shared_state.sqlite3` に移行済みである
   - B2 により lease / heartbeat / stale reclaim / 1回限定 auto retry を含む shared state 操作が実装済みである
   - C3 により、run snapshot は監査・再現用、実行判断は最新 shared truth 優先という境界がコード上で成立している
-  - 直近では `src/trade_simulator/research_manifest.py` に 1 acquisition の最小取得オーケストレーション入口を追加し、shared truth 優先で `claim -> fetch(stub) -> completed|failed` まで通せるようにした
+  - 直近では `src/trade_simulator/research_manifest.py` の shared state 周辺を整理し、旧 shared CSV helper 群の不要コード削除、shared state 更新 API の責務整理、`updated_at` と heartbeat/lease の意味整理を行った
 - 方針:
-  - 目的に対する現在位置は「shared state 境界と単一 acquisition 実行導線の最小骨格が揃った段階」である
-  - 次の自然な段階は、fetch stub を source family 別の実取得境界へ差し替え、run 実行記録を必要最小限で残すこと
+  - 目的に対する現在位置は「shared state の責務境界と単一 acquisition 実行導線の最小骨格が揃い、周辺の曖昧さを一度解消した段階」である
+  - 次の自然な段階は、fetch stub を source family 別の実取得境界へ差し替え、run 実行記録を必要最小限で残すことである
 - 推測:
   - 次に複数 acquisition の batch 実行へ進む前に、単一 acquisition の実取得責務と run 側記録責務をもう一段明確にする可能性が高い
 
@@ -149,10 +149,14 @@ external signal 周辺テストの考え方:
   - `source_family` の現行 allowed values は `news`, `sns`
   - shared truth の保存先は `var/cache/external_signals/shared_state.sqlite3` に固定済みである
   - `shared_cache_entries` は `shared_state_v2` schema で、lease / heartbeat / retry 列を持つ
+  - `updated_at` は shared truth の行更新時刻であり、stale 判定そのものには使わない
+  - stale 判定の主軸は `lease_expires_at` であり、heartbeat の最新時刻は `last_heartbeat_at` で表す
   - run directory 側の `cache_metadata.csv` は shared truth の run-start snapshot であり、再利用の実体ではない
   - `unresolved_acquisitions.csv` は run-start 時点の判定記録であり、実行直前の claim 可否判断には使わない
   - `orchestrate_research_acquisition()` は `decision_source="shared_truth"` 以外を拒否し、shared truth を再確認してから claim を試みる
-  - B2 の stale 判定主軸は `lease_expires_at` であり、`lease_expires_at < now` のときだけ stale とみなす
+  - `claim / heartbeat / complete / fail` が shared state の正規の状態遷移入口であり、曖昧な汎用 status 更新 API は削除済みである
+  - `cache_metadata.csv` は snapshot 出力としてのみ残し、旧 shared CSV を truth として更新する helper は削除済みである
+  - stale 判定は `lease_expires_at < now` のときだけ成立する
   - `failed` は原則 stop であり、`retryable=1` かつ `auto_retry_count=0` の場合のみ 1回だけ自動再 claim できる
 - 制約:
   - `simulate` の入出力契約を変えない
@@ -172,6 +176,7 @@ external signal 周辺テストの考え方:
   - shared state repository には `claim / heartbeat / complete / fail / stale reclaim` が実装済みである
   - `generate_research_manifest_run()` は SQLite shared truth を読み、`run_dir/cache_metadata.csv` と `unresolved_acquisitions.csv` を snapshot として出力する
   - `orchestrate_research_acquisition()` は run directory から acquisition identity を取り、shared truth を再確認して claim / skip / completed / failed を処理する
+  - shared state 周辺リファクタは完了しており、関連テストは `337 passed` で通過済みである
 - 方針:
   - 次は C3 の最小入口を足場にして、fetch stub を source family 別の実取得境界へ置き換えるのが自然である
   - 取得結果を run artifact 側へどう最小記録するかは、shared truth と混ぜずに別責務で設計する
@@ -188,11 +193,15 @@ external signal 周辺テストの考え方:
   - B2 により shared state schema は `shared_state_v2` へ拡張済みである
   - C3 により `metadata.json` と CLI 出力に `shared_state_role` / `cache_metadata_snapshot_role` / `unresolved_acquisitions_role` が入る
   - C3 の最小 orchestrator は run snapshot を根拠に claim 判定せず、shared truth を再確認する
+  - 今回のリファクタで、未使用だった旧 shared CSV helper 群と `update_shared_cache_entry_status()` は削除済みである
+  - 今回のリファクタで、shared state 遷移ロジックは内部 helper で共通化した
 - 注意点:
   - `run_dir/cache_metadata.csv` は audit / repro 用 snapshot であり、runtime truth ではない
   - `unresolved_acquisitions.csv` は run-start 判定記録であり、実取得可否の最終根拠ではない
   - `running` は unresolved から除外されるが、実行時には lease 状態を shared truth で再確認する
   - fetch はまだ stub であり、外部 source 実装が入ったわけではない
+  - `updated_at` は heartbeat 専用列ではなく、claim / heartbeat / complete / fail すべてで更新される行更新時刻である
+  - stale 判定や所有権確認は `updated_at` ではなく `lease_expires_at` / `last_heartbeat_at` / `claimed_by` を見る必要がある
 - 不明:
   - 実 source 実装をどの module 境界で差し込むかはまだ固定していない
 
@@ -203,7 +212,7 @@ external signal 周辺テストの考え方:
   - run 実行記録を shared truth と分離したまま最小追加する
   - batch 化や並列化の前に、単一 acquisition 実行の責務を明確に保つ
 - 今はやらないこと:
-  - A2/B2 のリファクタリング
+  - A2/B2/C3 の大規模な再設計
   - snapshot への lease 情報追加
   - source family 実装の大規模拡張
   - 並列取得
@@ -221,8 +230,8 @@ external signal 周辺テストの考え方:
 - 他に考えられる選択肢:
   - 複数 acquisition を順次実行する batch 入口を追加する
   - acquisition 実行結果を summary だけ残すか、attempt log を残すかを先に決める
-  - 推測:
-    - source family 別 fetch 境界を先に作った方が、batch 導線よりも責務分離を保ちやすい
+- 推測:
+  - source family 別 fetch 境界を先に作った方が、batch 導線よりも責務分離を保ちやすい
 
 ### 未確定事項 / 論点
 

@@ -17,7 +17,6 @@ ENGINE_VERSION = "research_manifest_dry_run_v1"
 CACHE_KEY_VERSION = "acquisition_cache_v1"
 CACHE_METADATA_SCHEMA_VERSION = "cache_metadata_v1"
 SHARED_STATE_SCHEMA_VERSION = "shared_state_v2"
-DEFAULT_SHARED_CACHE_METADATA_PATH = Path("var/cache/external_signals/cache_metadata.csv")
 DEFAULT_SHARED_STATE_DB_PATH = Path("var/cache/external_signals/shared_state.sqlite3")
 
 RESULT_STATUS_PENDING = "pending"
@@ -623,10 +622,6 @@ def build_acquisition_cache_key(
     )
 
 
-def build_initial_cache_metadata_rows() -> list[dict[str, object]]:
-    return []
-
-
 def _shared_cache_entries_table_exists(connection: sqlite3.Connection) -> bool:
     row = connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'shared_cache_entries'"
@@ -870,6 +865,40 @@ def _build_shared_cache_entry_row(
     )
 
 
+def _build_shared_cache_entry_state_row(
+    existing_row: dict[str, str],
+    *,
+    next_status: str,
+    state_changed_at: str,
+    claimed_at: str = "",
+    claimed_by: str = "",
+    lease_expires_at: str = "",
+    last_heartbeat_at: str = "",
+    auto_retry_count: int | str | None = None,
+    retryable: bool | int | str | None = None,
+    last_error_code: str | None = None,
+) -> dict[str, str]:
+    # updated_at tracks the last time this shared-truth row changed. Liveness is derived from
+    # lease_expires_at / last_heartbeat_at, so callers must not treat updated_at as a heartbeat.
+    return _build_shared_cache_entry_row(
+        cache_key=existing_row["cache_key"],
+        source_family=existing_row["source_family"],
+        symbol=existing_row["symbol"],
+        period_id=existing_row["period_id"],
+        period_signature=existing_row["period_signature"],
+        status=next_status,
+        created_at=existing_row["created_at"],
+        updated_at=state_changed_at,
+        claimed_at=claimed_at,
+        claimed_by=claimed_by,
+        lease_expires_at=lease_expires_at,
+        last_heartbeat_at=last_heartbeat_at,
+        auto_retry_count=existing_row["auto_retry_count"] if auto_retry_count is None else auto_retry_count,
+        retryable=existing_row["retryable"] if retryable is None else retryable,
+        last_error_code=existing_row["last_error_code"] if last_error_code is None else last_error_code,
+    )
+
+
 def _save_shared_cache_entry_in_connection(
     connection: sqlite3.Connection,
     row: dict[str, str],
@@ -913,6 +942,8 @@ def is_shared_cache_entry_stale(
     *,
     now: str | datetime,
 ) -> bool:
+    # Staleness is lease-based. updated_at is only the last row-mutation timestamp and does not
+    # decide whether a running worker still owns the entry.
     if shared_cache_entry["status"] != RESULT_STATUS_RUNNING:
         return False
     lease_expires_at = shared_cache_entry["lease_expires_at"]
@@ -953,6 +984,8 @@ def load_shared_cache_entries(
 def build_cache_metadata_snapshot_rows(
     shared_cache_entries: list[dict[str, str]],
 ) -> list[dict[str, str]]:
+    # Run snapshots keep only the audit/repro fields needed to describe the run-start shared truth.
+    # Lease and heartbeat columns stay in SQLite runtime truth and are intentionally omitted here.
     return [
         _build_cache_metadata_row(
             cache_key=row["cache_key"],
@@ -1038,40 +1071,6 @@ def upsert_shared_cache_entry(
     return find_shared_cache_entry(path, cache_key=cache_key)  # type: ignore[return-value]
 
 
-def update_shared_cache_entry_status(
-    db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
-    *,
-    cache_key: str,
-    next_status: str,
-    updated_at: str,
-) -> dict[str, str]:
-    path = initialize_shared_state_db(db_path)
-    get_shared_state_schema_version(path)
-    existing_row = find_shared_cache_entry(path, cache_key=cache_key)
-    if existing_row is None:
-        raise ValueError(f"cache_key not found in shared_cache_entries: {cache_key}")
-    validate_acquisition_status_transition(existing_row["status"], next_status)
-    if next_status == RESULT_STATUS_RUNNING:
-        raise ValueError("update_shared_cache_entry_status cannot set running without lease fields")
-    updated_row = _build_shared_cache_entry_row(
-        cache_key=existing_row["cache_key"],
-        source_family=existing_row["source_family"],
-        symbol=existing_row["symbol"],
-        period_id=existing_row["period_id"],
-        period_signature=existing_row["period_signature"],
-        status=next_status,
-        created_at=existing_row["created_at"],
-        updated_at=updated_at,
-        auto_retry_count=existing_row["auto_retry_count"],
-        retryable=existing_row["retryable"] if next_status == RESULT_STATUS_FAILED else False,
-        last_error_code=existing_row["last_error_code"] if next_status == RESULT_STATUS_FAILED else "",
-    )
-    with _connect_shared_state_db(path) as connection:
-        _save_shared_cache_entry_in_connection(connection, updated_row)
-        connection.commit()
-    return find_shared_cache_entry(path, cache_key=cache_key)  # type: ignore[return-value]
-
-
 def claim_shared_cache_entry(
     db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
     *,
@@ -1104,15 +1103,10 @@ def claim_shared_cache_entry(
         if not can_claim:
             raise ValueError(f"cache_key is not claimable: {cache_key}")
 
-        claimed_row = _build_shared_cache_entry_row(
-            cache_key=existing_row["cache_key"],
-            source_family=existing_row["source_family"],
-            symbol=existing_row["symbol"],
-            period_id=existing_row["period_id"],
-            period_signature=existing_row["period_signature"],
-            status=RESULT_STATUS_RUNNING,
-            created_at=existing_row["created_at"],
-            updated_at=claimed_at,
+        claimed_row = _build_shared_cache_entry_state_row(
+            existing_row,
+            next_status=RESULT_STATUS_RUNNING,
+            state_changed_at=claimed_at,
             claimed_at=claimed_at,
             claimed_by=claimed_by.strip(),
             lease_expires_at=lease_expires_at,
@@ -1149,22 +1143,14 @@ def heartbeat_shared_cache_entry(
             raise ValueError(f"heartbeat requires matching claimed_by for cache_key {cache_key}")
         if is_shared_cache_entry_stale(existing_row, now=heartbeat_time):
             raise ValueError(f"heartbeat requires an active lease for cache_key {cache_key}")
-        heartbeat_row = _build_shared_cache_entry_row(
-            cache_key=existing_row["cache_key"],
-            source_family=existing_row["source_family"],
-            symbol=existing_row["symbol"],
-            period_id=existing_row["period_id"],
-            period_signature=existing_row["period_signature"],
-            status=RESULT_STATUS_RUNNING,
-            created_at=existing_row["created_at"],
-            updated_at=heartbeat_at,
+        heartbeat_row = _build_shared_cache_entry_state_row(
+            existing_row,
+            next_status=RESULT_STATUS_RUNNING,
+            state_changed_at=heartbeat_at,
             claimed_at=existing_row["claimed_at"],
             claimed_by=existing_row["claimed_by"],
             lease_expires_at=lease_expires_at,
             last_heartbeat_at=heartbeat_at,
-            auto_retry_count=existing_row["auto_retry_count"],
-            retryable=existing_row["retryable"],
-            last_error_code=existing_row["last_error_code"],
         )
         _save_shared_cache_entry_in_connection(connection, heartbeat_row)
         connection.commit()
@@ -1192,16 +1178,10 @@ def complete_shared_cache_entry(
             raise ValueError(f"complete requires matching claimed_by for cache_key {cache_key}")
         if is_shared_cache_entry_stale(existing_row, now=completed_time):
             raise ValueError(f"complete requires an active lease for cache_key {cache_key}")
-        completed_row = _build_shared_cache_entry_row(
-            cache_key=existing_row["cache_key"],
-            source_family=existing_row["source_family"],
-            symbol=existing_row["symbol"],
-            period_id=existing_row["period_id"],
-            period_signature=existing_row["period_signature"],
-            status=RESULT_STATUS_COMPLETED,
-            created_at=existing_row["created_at"],
-            updated_at=completed_at,
-            auto_retry_count=existing_row["auto_retry_count"],
+        completed_row = _build_shared_cache_entry_state_row(
+            existing_row,
+            next_status=RESULT_STATUS_COMPLETED,
+            state_changed_at=completed_at,
             retryable=False,
             last_error_code="",
         )
@@ -1234,32 +1214,16 @@ def fail_shared_cache_entry(
             raise ValueError(f"fail requires matching claimed_by for cache_key {cache_key}")
         if is_shared_cache_entry_stale(existing_row, now=failed_time):
             raise ValueError(f"fail requires an active lease for cache_key {cache_key}")
-        failed_row = _build_shared_cache_entry_row(
-            cache_key=existing_row["cache_key"],
-            source_family=existing_row["source_family"],
-            symbol=existing_row["symbol"],
-            period_id=existing_row["period_id"],
-            period_signature=existing_row["period_signature"],
-            status=RESULT_STATUS_FAILED,
-            created_at=existing_row["created_at"],
-            updated_at=failed_at,
-            auto_retry_count=existing_row["auto_retry_count"],
+        failed_row = _build_shared_cache_entry_state_row(
+            existing_row,
+            next_status=RESULT_STATUS_FAILED,
+            state_changed_at=failed_at,
             retryable=retryable,
             last_error_code=error_code,
         )
         _save_shared_cache_entry_in_connection(connection, failed_row)
         connection.commit()
     return find_shared_cache_entry(path, cache_key=cache_key)  # type: ignore[return-value]
-
-
-def delete_legacy_shared_cache_metadata_csv(
-    legacy_csv_path: str | Path = DEFAULT_SHARED_CACHE_METADATA_PATH,
-) -> bool:
-    path = Path(legacy_csv_path)
-    if not path.exists():
-        return False
-    path.unlink()
-    return True
 
 
 def load_cache_metadata_rows(csv_path: str | Path) -> list[dict[str, str]]:
@@ -1297,28 +1261,6 @@ def load_cache_metadata_rows(csv_path: str | Path) -> list[dict[str, str]]:
     return normalized_rows
 
 
-def load_shared_cache_metadata_rows(
-    shared_cache_metadata_path: str | Path = DEFAULT_SHARED_CACHE_METADATA_PATH,
-) -> list[dict[str, str]]:
-    path = Path(shared_cache_metadata_path)
-    if not path.exists():
-        return []
-    return load_cache_metadata_rows(path)
-
-
-def find_cache_metadata_row(
-    cache_metadata_rows: list[dict[str, str]],
-    *,
-    cache_key: str,
-) -> dict[str, str] | None:
-    matches = [row for row in cache_metadata_rows if row["cache_key"] == cache_key]
-    if len(matches) > 1:
-        raise ValueError(f"cache_key must be unique in cache_metadata: {cache_key}")
-    if not matches:
-        return None
-    return matches[0]
-
-
 def _build_cache_metadata_row(
     *,
     cache_key: str,
@@ -1342,88 +1284,6 @@ def _build_cache_metadata_row(
         "updated_at": updated_at,
         "schema_version": CACHE_METADATA_SCHEMA_VERSION,
     }
-
-
-def upsert_cache_metadata_row(
-    cache_metadata_rows: list[dict[str, str]],
-    *,
-    cache_key: str,
-    source_family: str,
-    symbol: str,
-    period_id: str,
-    period_signature: str,
-    status: str,
-    created_at: str,
-    updated_at: str,
-) -> list[dict[str, str]]:
-    new_row = _build_cache_metadata_row(
-        cache_key=cache_key,
-        source_family=source_family,
-        symbol=symbol,
-        period_id=period_id,
-        period_signature=period_signature,
-        status=status,
-        created_at=created_at,
-        updated_at=updated_at,
-    )
-    existing_row = find_cache_metadata_row(cache_metadata_rows, cache_key=cache_key)
-    if existing_row is None:
-        return [*cache_metadata_rows, new_row]
-
-    immutable_columns = ("cache_key", "cache_key_version", "source_family", "symbol", "period_id", "period_signature", "schema_version")
-    for column in immutable_columns:
-        if existing_row[column] != new_row[column]:
-            raise ValueError(f"cache_metadata row mismatch for cache_key {cache_key}: {column}")
-
-    updated_rows: list[dict[str, str]] = []
-    for row in cache_metadata_rows:
-        if row["cache_key"] == cache_key:
-            updated_rows.append(
-                {
-                    **row,
-                    "status": new_row["status"],
-                    "updated_at": updated_at,
-                }
-            )
-        else:
-            updated_rows.append(row)
-    return updated_rows
-
-
-def update_cache_metadata_status(
-    cache_metadata_rows: list[dict[str, str]],
-    *,
-    cache_key: str,
-    next_status: str,
-    updated_at: str,
-) -> list[dict[str, str]]:
-    existing_row = find_cache_metadata_row(cache_metadata_rows, cache_key=cache_key)
-    if existing_row is None:
-        raise ValueError(f"cache_key not found in cache_metadata: {cache_key}")
-    validate_acquisition_status_transition(existing_row["status"], next_status)
-    updated_rows: list[dict[str, str]] = []
-    for row in cache_metadata_rows:
-        if row["cache_key"] == cache_key:
-            updated_rows.append(
-                {
-                    **row,
-                    "status": next_status,
-                    "updated_at": updated_at,
-                }
-            )
-        else:
-            updated_rows.append(row)
-    return updated_rows
-
-
-def save_shared_cache_metadata_rows(
-    cache_metadata_rows: list[dict[str, str]],
-    shared_cache_metadata_path: str | Path = DEFAULT_SHARED_CACHE_METADATA_PATH,
-) -> Path:
-    path = Path(shared_cache_metadata_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _write_csv(path, CACHE_METADATA_COLUMNS, cache_metadata_rows)
-    return path
 
 
 def build_acquisition_manifest_rows(
