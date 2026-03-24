@@ -172,6 +172,45 @@ def test_build_external_signal_consumption_features_rebuilds_matching_series_fro
     }
 
 
+def test_build_external_signal_consumption_features_accepts_custom_blended_weights() -> None:
+    feature_timeline = build_external_feature_timeline(
+        [
+            "2024-01-01T01:00:00Z",
+            "2024-01-01T02:00:00Z",
+            "2024-01-01T03:00:00Z",
+        ],
+        [
+            build_completed_summary(
+                signal_type="news",
+                source="coindesk_rss",
+                symbol_distribution={"BTCUSDT": 2},
+                topic_distribution={"policy": 1},
+            ),
+            build_completed_summary(
+                ended_at="2024-01-01T01:15:00Z",
+                signal_type="news",
+                source="sec_press_releases_rss",
+                symbol_distribution={"ETHUSDT": 3},
+                topic_distribution={"policy": 2},
+            ),
+        ],
+        symbol="BTC/USDT",
+        topics=["policy"],
+    )
+
+    consumption_features = build_external_signal_consumption_features(
+        feature_timeline,
+        blended_weights={"symbol": 0.5, "topic": 0.5},
+    )
+
+    assert consumption_features["series"]["weighted_matching_signal_count"] == pytest.approx([3.0, 4.1, 2.6])
+    assert consumption_features["series"]["blended_weighted_signal_count"] == pytest.approx([1.5, 2.05, 1.3])
+    assert consumption_features["summary"]["blended_definition"]["weights"] == {
+        "symbol_weight": 0.5,
+        "topic_weight": 0.5,
+    }
+
+
 def test_build_external_signal_consumption_features_builds_blended_weighted_series_for_symbol_only_case() -> None:
     feature_timeline = build_external_feature_timeline(
         [
@@ -219,6 +258,44 @@ def test_build_external_signal_consumption_features_builds_blended_weighted_seri
 
     assert consumption_features["series"]["weighted_matching_signal_count"] == pytest.approx([2.0, 1.4, 0.8])
     assert consumption_features["series"]["blended_weighted_signal_count"] == pytest.approx([0.6, 0.42, 0.24])
+
+
+def test_build_external_signal_consumption_features_falls_back_to_default_blended_weights_for_invalid_values() -> None:
+    feature_timeline = build_external_feature_timeline(
+        [
+            "2024-01-01T01:00:00Z",
+            "2024-01-01T02:00:00Z",
+            "2024-01-01T03:00:00Z",
+        ],
+        [
+            build_completed_summary(
+                signal_type="news",
+                source="coindesk_rss",
+                symbol_distribution={"BTCUSDT": 2},
+                topic_distribution={"policy": 1},
+            )
+        ],
+        symbol="BTC/USDT",
+        topics=["policy"],
+    )
+
+    invalid_cases = [
+        {"symbol": "bad", "topic": 0.5},
+        {"symbol": -1.0, "topic": 1.0},
+        {"symbol": 0.0, "topic": 0.0},
+    ]
+
+    for invalid_weights in invalid_cases:
+        consumption_features = build_external_signal_consumption_features(
+            feature_timeline,
+            blended_weights=invalid_weights,
+        )
+
+        assert consumption_features["series"]["blended_weighted_signal_count"] == pytest.approx([1.7, 1.19, 0.68])
+        assert consumption_features["summary"]["blended_definition"]["weights"] == {
+            "symbol_weight": 0.7,
+            "topic_weight": 0.3,
+        }
 
 
 def test_build_external_feature_timeline_sums_weighted_contributions_when_runs_overlap() -> None:
@@ -986,6 +1063,58 @@ def test_prepare_external_signal_manual_case_can_select_blended_consumption_seri
     assert prepared_case["exit_signals"] == [False, False, False]
     assert prepared_case["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 0.28, 0.84])
     assert prepared_case["external_signal_consumption_features"]["series"]["blended_weighted_signal_count"] == pytest.approx([0.0, 0.14, 0.42])
+
+
+def test_prepare_external_signal_manual_case_applies_custom_blended_weights_to_signal_selection() -> None:
+    prepared_case = prepare_external_signal_manual_case(
+        {
+            "name": "external_signal_blended_weighted_case",
+            "simulation_name": "external_signal_blended_weighted_case",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.01, 0.02, -0.01],
+            "external_signal": {
+                "topics": ["policy"],
+                "entry_count_threshold": 0.5,
+                "exit_after_inactive_periods": 1,
+                "consumption_series_name": "blended_weighted_signal_count",
+                "blended_weights": {
+                    "symbol": 1.0,
+                    "topic": 1.0,
+                },
+                "run_metrics_by_run_id": {
+                    "run-youtube-1": {"attention_score": 1.0},
+                },
+            },
+        },
+        return_timestamps=[
+            "2024-01-01T01:00:00Z",
+            "2024-01-01T02:00:00Z",
+            "2024-01-01T03:00:00Z",
+        ],
+        symbol="BTC/USDT",
+        summaries=[
+            {
+                "run_id": "run-youtube-1",
+                "status": "completed",
+                "ended_at": "2024-01-01T01:30:00Z",
+                "signal_type": "sns",
+                "source": "youtube_channel_rss",
+                "symbol_distribution": {"BTCUSDT": 1},
+                "topic_distribution": {"policy": 1},
+            }
+        ],
+    )
+
+    assert prepared_case["entry_signals"] == [False, False, True]
+    assert prepared_case["exit_signals"] == [False, False, False]
+    assert prepared_case["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 0.28, 0.84])
+    assert prepared_case["external_signal_consumption_features"]["series"]["blended_weighted_signal_count"] == pytest.approx([0.0, 0.28, 0.84])
+    assert prepared_case["external_signal_consumption_features"]["summary"]["blended_definition"]["weights"] == {
+        "symbol_weight": 1.0,
+        "topic_weight": 1.0,
+    }
 
 
 def test_prepare_external_signal_manual_case_rejects_conflicting_non_manual_strategy() -> None:

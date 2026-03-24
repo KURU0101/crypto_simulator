@@ -10,8 +10,8 @@ from trade_simulator.integrated_observer import scan_saved_signal_summaries
 
 
 DEFAULT_TIME_WEIGHT_PROFILE = (1.0,)
-BLENDED_SYMBOL_WEIGHT = 0.7
-BLENDED_TOPIC_WEIGHT = 0.3
+DEFAULT_BLENDED_SYMBOL_WEIGHT = 0.7
+DEFAULT_BLENDED_TOPIC_WEIGHT = 0.3
 DEFAULT_CONSUMPTION_SERIES_NAME = "weighted_matching_signal_count"
 ALLOWED_CONSUMPTION_SERIES_NAMES = (
     "weighted_matching_signal_count",
@@ -556,16 +556,39 @@ def _build_matching_consumption_series(series: dict, *, matching_run_count: list
     }
 
 
-def _build_blended_weighted_signal_count(series: dict) -> list[float]:
+def _resolve_blended_weights(blended_weights: object) -> dict[str, float]:
+    default_weights = {
+        "symbol_weight": DEFAULT_BLENDED_SYMBOL_WEIGHT,
+        "topic_weight": DEFAULT_BLENDED_TOPIC_WEIGHT,
+    }
+    if not isinstance(blended_weights, dict):
+        return default_weights
+
+    symbol_weight = _read_finite_number(blended_weights.get("symbol"))
+    topic_weight = _read_finite_number(blended_weights.get("topic"))
+    if symbol_weight is None or topic_weight is None:
+        return default_weights
+    if symbol_weight < 0 or topic_weight < 0:
+        return default_weights
+    if symbol_weight == 0 and topic_weight == 0:
+        return default_weights
+
+    return {
+        "symbol_weight": float(symbol_weight),
+        "topic_weight": float(topic_weight),
+    }
+
+
+def _build_blended_weighted_signal_count(series: dict, *, blended_weights: dict[str, float]) -> list[float]:
     weighted_symbol_signal_count = list(series["weighted_symbol_signal_count"])
     weighted_topic_signal_count = list(series["weighted_topic_signal_count"])
     return [
-        symbol_count * BLENDED_SYMBOL_WEIGHT + topic_count * BLENDED_TOPIC_WEIGHT
+        symbol_count * blended_weights["symbol_weight"] + topic_count * blended_weights["topic_weight"]
         for symbol_count, topic_count in zip(weighted_symbol_signal_count, weighted_topic_signal_count)
     ]
 
 
-def _build_consumption_summary() -> dict:
+def _build_consumption_summary(*, blended_weights: dict[str, float]) -> dict:
     return {
         "matching_definition": {
             "raw": "symbol_signal_count + topic_signal_count",
@@ -577,8 +600,8 @@ def _build_consumption_summary() -> dict:
                 "weighted_topic_signal_count",
             ],
             "weights": {
-                "symbol_weight": BLENDED_SYMBOL_WEIGHT,
-                "topic_weight": BLENDED_TOPIC_WEIGHT,
+                "symbol_weight": blended_weights["symbol_weight"],
+                "topic_weight": blended_weights["topic_weight"],
             },
         },
     }
@@ -593,7 +616,7 @@ def _resolve_consumption_series_name(consumption_series_name: object) -> str:
     return str(consumption_series_name)
 
 
-def build_external_signal_consumption_features(feature_timeline: object) -> dict:
+def build_external_signal_consumption_features(feature_timeline: object, *, blended_weights: object = None) -> dict:
     if not isinstance(feature_timeline, dict):
         raise TypeError("feature_timeline must be a dict")
 
@@ -616,18 +639,22 @@ def build_external_signal_consumption_features(feature_timeline: object) -> dict
         feature_timeline,
         len(series["symbol_signal_count"]),
     )
+    resolved_blended_weights = _resolve_blended_weights(blended_weights)
     consumption_series = _build_matching_consumption_series(
         series,
         matching_run_count=matching_run_count,
         weighted_matching_run_count=weighted_matching_run_count,
     )
-    consumption_series["blended_weighted_signal_count"] = _build_blended_weighted_signal_count(series)
+    consumption_series["blended_weighted_signal_count"] = _build_blended_weighted_signal_count(
+        series,
+        blended_weights=resolved_blended_weights,
+    )
     return {
         "return_timestamps": list(feature_timeline.get("return_timestamps", [])),
         "selected_symbol": feature_timeline.get("selected_symbol"),
         "selected_topics": list(feature_timeline.get("selected_topics", [])),
         "series": consumption_series,
-        "summary": _build_consumption_summary(),
+        "summary": _build_consumption_summary(blended_weights=resolved_blended_weights),
     }
 
 
@@ -639,11 +666,11 @@ def _coerce_consumption_features(value: object) -> dict:
     if not isinstance(series, dict):
         raise ValueError("consumption_features must include a series dict")
 
-    if any(field_name in value for field_name in ("time_weight_profiles", "adjustments", "selected_symbol", "selected_topics")):
-        return build_external_signal_consumption_features(value)
-
     if isinstance(series.get("weighted_matching_signal_count"), list):
         return value
+
+    if any(field_name in value for field_name in ("time_weight_profiles", "adjustments", "selected_symbol", "selected_topics")):
+        return build_external_signal_consumption_features(value)
 
     return build_external_signal_consumption_features(value)
 
@@ -807,7 +834,10 @@ def prepare_external_signal_manual_case(
         run_metrics_by_run_id=external_signal.get("run_metrics_by_run_id"),
         feature_overrides=external_signal.get("feature_overrides"),
     )
-    consumption_features = build_external_signal_consumption_features(feature_timeline)
+    consumption_features = build_external_signal_consumption_features(
+        feature_timeline,
+        blended_weights=external_signal.get("blended_weights"),
+    )
     entry_signals, exit_signals = build_external_feature_signals(
         consumption_features,
         entry_count_threshold=external_signal.get("entry_count_threshold", 1),
