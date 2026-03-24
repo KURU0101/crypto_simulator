@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from trade_simulator.research_manifest import (
+    ACQUISITION_MANIFEST_COLUMNS,
     ALLOWED_RESULT_STATUSES,
     CACHE_KEY_VERSION,
     CACHE_METADATA_SCHEMA_VERSION,
@@ -24,6 +25,7 @@ from trade_simulator.research_manifest import (
     build_acquisition_manifest_rows,
     claim_shared_cache_entry,
     complete_shared_cache_entry,
+    ensure_shared_cache_entry_for_acquisition,
     fail_shared_cache_entry,
     fetch_acquisition_payload,
     build_manifest_rows,
@@ -38,6 +40,8 @@ from trade_simulator.research_manifest import (
     load_shared_cache_entries,
     load_grid_rows,
     load_period_rows,
+    load_research_run_metadata,
+    load_run_acquisition_manifest_row,
     select_eligible_signal_only_grids,
     upsert_shared_cache_entry,
     validate_acquisition_status,
@@ -723,6 +727,48 @@ def test_build_cache_metadata_snapshot_rows_renders_csv_schema_from_sqlite_rows(
             "schema_version": CACHE_METADATA_SCHEMA_VERSION,
         }
     ]
+
+
+def test_build_cache_metadata_snapshot_rows_excludes_runtime_lease_columns() -> None:
+    snapshot_rows = build_cache_metadata_snapshot_rows(
+        [
+            {
+                "cache_key": "cache_a",
+                "cache_key_version": CACHE_KEY_VERSION,
+                "source_family": "news",
+                "symbol": "BTCUSD",
+                "period_id": "p_alpha",
+                "period_signature": "sig_alpha",
+                "status": "running",
+                "created_at": "2026-03-24T00:00:00Z",
+                "updated_at": "2026-03-24T00:01:00Z",
+                "claimed_at": "2026-03-24T00:00:00Z",
+                "claimed_by": "worker-a",
+                "lease_expires_at": "2026-03-24T00:05:00Z",
+                "last_heartbeat_at": "2026-03-24T00:01:00Z",
+                "auto_retry_count": "0",
+                "retryable": "0",
+                "last_error_code": "",
+            }
+        ]
+    )
+
+    assert list(snapshot_rows[0]) == list(
+        [
+            "cache_key",
+            "cache_key_version",
+            "source_family",
+            "symbol",
+            "period_id",
+            "period_signature",
+            "status",
+            "created_at",
+            "updated_at",
+            "schema_version",
+        ]
+    )
+    assert "lease_expires_at" not in snapshot_rows[0]
+    assert "last_heartbeat_at" not in snapshot_rows[0]
 
 
 def test_shared_cache_entry_upsert_find_and_list_round_trip(tmp_path: Path) -> None:
@@ -1604,6 +1650,43 @@ def test_orchestrate_research_acquisition_rechecks_shared_truth_after_run_snapsh
     assert result["shared_truth_status_after"] == "completed"
 
 
+def test_ensure_shared_cache_entry_for_acquisition_preserves_existing_shared_truth(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    existing_row = _seed_shared_cache_entry(db_path, status="completed")
+
+    ensured_row = ensure_shared_cache_entry_for_acquisition(
+        db_path,
+        acquisition_row={
+            "cache_key": "cache_a",
+            "source_family": "news",
+            "symbol": "BTCUSD",
+            "period_id": "p_alpha",
+            "period_signature": "sig_alpha",
+        },
+        created_at="2026-03-25T00:00:00Z",
+    )
+
+    assert ensured_row == existing_row
+    assert find_shared_cache_entry(db_path, cache_key="cache_a") == existing_row
+
+
+def test_load_run_acquisition_manifest_row_rejects_duplicate_acquisition_id(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    manifest_path = run_dir / "acquisition_manifest.csv"
+    _write_csv(
+        manifest_path,
+        list(ACQUISITION_MANIFEST_COLUMNS),
+        [
+            ["run_x", "aq_dup", "news", "BTCUSD", "p1", "sig1", "2024-01-01", "2024-01-02", "pending", "cache1", "t1", "t1"],
+            ["run_x", "aq_dup", "news", "ETHUSD", "p2", "sig2", "2024-01-03", "2024-01-04", "pending", "cache2", "t1", "t1"],
+        ],
+    )
+
+    with pytest.raises(ValueError, match="acquisition_id must be unique in acquisition_manifest: aq_dup"):
+        load_run_acquisition_manifest_row(run_dir, acquisition_id="aq_dup")
+
+
 def test_orchestrate_research_acquisition_does_not_reclaim_active_running_from_snapshot(tmp_path: Path) -> None:
     periods_path = tmp_path / "periods.csv"
     grids_path = tmp_path / "grids.csv"
@@ -1708,6 +1791,15 @@ def test_orchestrate_research_acquisition_rejects_shared_truth_access_failure(tm
             claimed_by="worker-a",
             lease_duration_seconds=300,
         )
+
+
+def test_load_research_run_metadata_requires_object_payload(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "metadata.json").write_text('["not-an-object"]\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="research run metadata must be a JSON object"):
+        load_research_run_metadata(run_dir)
 
 
 def test_generate_research_manifest_run_excludes_running_and_keeps_pending_failed_from_sqlite(tmp_path: Path) -> None:
