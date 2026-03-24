@@ -24,13 +24,18 @@ from trade_simulator.research_manifest import (
     build_unresolved_acquisition_rows,
     build_acquisition_cache_key,
     build_acquisition_manifest_rows,
+    claim_shared_cache_entry,
+    complete_shared_cache_entry,
     delete_legacy_shared_cache_metadata_csv,
+    fail_shared_cache_entry,
     build_manifest_rows,
     find_shared_cache_entry,
     generate_research_manifest_run,
+    heartbeat_shared_cache_entry,
     find_cache_metadata_row,
     get_shared_state_schema_version,
     initialize_shared_state_db,
+    is_shared_cache_entry_stale,
     load_cache_metadata_rows,
     load_shared_cache_entries,
     load_shared_cache_metadata_rows,
@@ -160,6 +165,33 @@ def _write_valid_grids_csv(path: Path) -> None:
             ],
         ],
     )
+
+
+def _seed_shared_cache_entry(db_path: Path, *, status: str = "pending", retryable: bool = False, auto_retry_count: int = 0) -> dict[str, str]:
+    base_kwargs = {
+        "cache_key": "cache_a",
+        "source_family": "news",
+        "symbol": "BTCUSD",
+        "period_id": "p_alpha",
+        "period_signature": "sig_alpha",
+        "status": status,
+        "created_at": "2026-03-24T00:00:00Z",
+        "updated_at": "2026-03-24T00:00:00Z",
+        "auto_retry_count": auto_retry_count,
+        "retryable": retryable,
+    }
+    if status == "running":
+        base_kwargs.update(
+            {
+                "claimed_at": "2026-03-24T00:00:00Z",
+                "claimed_by": "worker-a",
+                "lease_expires_at": "2026-03-24T00:10:00Z",
+                "last_heartbeat_at": "2026-03-24T00:00:00Z",
+            }
+        )
+    if status == "failed":
+        base_kwargs["last_error_code"] = "runtime_error"
+    return upsert_shared_cache_entry(db_path, **base_kwargs)
 
 
 def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(tmp_path: Path) -> None:
@@ -647,6 +679,47 @@ def test_initialize_shared_state_db_creates_sqlite_and_schema_version(tmp_path: 
     assert get_shared_state_schema_version(db_path) == SHARED_STATE_SCHEMA_VERSION
 
 
+def test_initialize_shared_state_db_migrates_v1_schema_to_v2(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("CREATE TABLE shared_state_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute("INSERT INTO shared_state_meta(key, value) VALUES ('schema_version', 'shared_state_v1')")
+        connection.execute(
+            """
+            CREATE TABLE shared_cache_entries (
+                cache_key TEXT PRIMARY KEY,
+                cache_key_version TEXT NOT NULL,
+                source_family TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                period_id TEXT NOT NULL,
+                period_signature TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO shared_cache_entries (
+                cache_key, cache_key_version, source_family, symbol, period_id, period_signature, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("cache_a", CACHE_KEY_VERSION, "news", "BTCUSD", "p_alpha", "sig_alpha", "pending", "t1", "t1"),
+        )
+        connection.commit()
+
+    initialize_shared_state_db(db_path)
+    loaded_row = find_shared_cache_entry(db_path, cache_key="cache_a")
+
+    assert get_shared_state_schema_version(db_path) == SHARED_STATE_SCHEMA_VERSION
+    assert loaded_row is not None
+    assert loaded_row["claimed_by"] == ""
+    assert loaded_row["auto_retry_count"] == "0"
+    assert loaded_row["retryable"] == "0"
+
+
 def test_shared_state_default_path_is_fixed() -> None:
     assert DEFAULT_SHARED_STATE_DB_PATH == Path("var/cache/external_signals/shared_state.sqlite3")
 
@@ -717,6 +790,13 @@ def test_shared_cache_entry_upsert_find_and_list_round_trip(tmp_path: Path) -> N
         "status": "pending",
         "created_at": "2026-03-24T00:00:00Z",
         "updated_at": "2026-03-24T00:00:00Z",
+        "claimed_at": "",
+        "claimed_by": "",
+        "lease_expires_at": "",
+        "last_heartbeat_at": "",
+        "auto_retry_count": "0",
+        "retryable": "0",
+        "last_error_code": "",
     }
     assert find_shared_cache_entry(db_path, cache_key="cache_a") == upserted_row
     assert load_shared_cache_entries(db_path) == [upserted_row]
@@ -746,6 +826,10 @@ def test_upsert_shared_cache_entry_updates_existing_row_for_same_cache_key(tmp_p
         status="running",
         created_at="2026-03-24T00:00:00Z",
         updated_at="2026-03-24T00:01:00Z",
+        claimed_at="2026-03-24T00:01:00Z",
+        claimed_by="worker-a",
+        lease_expires_at="2026-03-24T00:06:00Z",
+        last_heartbeat_at="2026-03-24T00:01:00Z",
     )
 
     assert updated_row["status"] == "running"
@@ -753,7 +837,7 @@ def test_upsert_shared_cache_entry_updates_existing_row_for_same_cache_key(tmp_p
     assert updated_row["updated_at"] == "2026-03-24T00:01:00Z"
 
 
-def test_update_shared_cache_entry_status_applies_valid_transition(tmp_path: Path) -> None:
+def test_update_shared_cache_entry_status_applies_valid_non_running_transition(tmp_path: Path) -> None:
     db_path = tmp_path / "shared" / "shared_state.sqlite3"
     upsert_shared_cache_entry(
         db_path,
@@ -767,15 +851,43 @@ def test_update_shared_cache_entry_status_applies_valid_transition(tmp_path: Pat
         updated_at="2026-03-24T00:00:00Z",
     )
 
+    upsert_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="running",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:01:00Z",
+        claimed_at="2026-03-24T00:01:00Z",
+        claimed_by="worker-a",
+        lease_expires_at="2026-03-24T00:06:00Z",
+        last_heartbeat_at="2026-03-24T00:01:00Z",
+    )
     updated_row = update_shared_cache_entry_status(
         db_path,
         cache_key="cache_a",
-        next_status="running",
-        updated_at="2026-03-24T00:01:00Z",
+        next_status="completed",
+        updated_at="2026-03-24T00:02:00Z",
     )
 
-    assert updated_row["status"] == "running"
-    assert updated_row["updated_at"] == "2026-03-24T00:01:00Z"
+    assert updated_row["status"] == "completed"
+    assert updated_row["claimed_by"] == ""
+
+
+def test_update_shared_cache_entry_status_rejects_running_without_lease_fields(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="pending")
+
+    with pytest.raises(ValueError, match="cannot set running without lease fields"):
+        update_shared_cache_entry_status(
+            db_path,
+            cache_key="cache_a",
+            next_status="running",
+            updated_at="2026-03-24T00:01:00Z",
+        )
 
 
 def test_get_shared_state_schema_version_rejects_invalid_meta_value(tmp_path: Path) -> None:
@@ -872,6 +984,243 @@ def test_delete_legacy_shared_cache_metadata_csv_is_safe_when_absent(tmp_path: P
     deleted = delete_legacy_shared_cache_metadata_csv(legacy_csv_path)
 
     assert deleted is False
+
+
+def test_claim_shared_cache_entry_claims_pending_entry(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="pending")
+
+    claimed_row = claim_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        claimed_by="worker-a",
+        claimed_at="2026-03-24T00:01:00Z",
+        lease_duration_seconds=300,
+    )
+
+    assert claimed_row["status"] == "running"
+    assert claimed_row["claimed_by"] == "worker-a"
+    assert claimed_row["last_heartbeat_at"] == "2026-03-24T00:01:00Z"
+    assert claimed_row["lease_expires_at"] == "2026-03-24T00:06:00Z"
+
+
+def test_heartbeat_shared_cache_entry_extends_active_lease(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="running")
+
+    heartbeat_row = heartbeat_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        claimed_by="worker-a",
+        heartbeat_at="2026-03-24T00:04:00Z",
+        lease_duration_seconds=300,
+    )
+
+    assert heartbeat_row["last_heartbeat_at"] == "2026-03-24T00:04:00Z"
+    assert heartbeat_row["lease_expires_at"] == "2026-03-24T00:09:00Z"
+
+
+def test_complete_shared_cache_entry_completes_running_entry(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="running")
+
+    completed_row = complete_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        claimed_by="worker-a",
+        completed_at="2026-03-24T00:05:00Z",
+    )
+
+    assert completed_row["status"] == "completed"
+    assert completed_row["claimed_at"] == ""
+
+
+def test_fail_shared_cache_entry_marks_retryable_failed_entry(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="running")
+
+    failed_row = fail_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        claimed_by="worker-a",
+        failed_at="2026-03-24T00:05:00Z",
+        retryable=True,
+        last_error_code="runtime_error",
+    )
+
+    assert failed_row["status"] == "failed"
+    assert failed_row["retryable"] == "1"
+    assert failed_row["auto_retry_count"] == "0"
+    assert failed_row["last_error_code"] == "runtime_error"
+
+
+def test_claim_shared_cache_entry_reclaims_stale_running_entry(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="running")
+
+    reclaimed_row = claim_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        claimed_by="worker-b",
+        claimed_at="2026-03-24T00:10:01Z",
+        lease_duration_seconds=300,
+    )
+
+    assert reclaimed_row["claimed_by"] == "worker-b"
+    assert reclaimed_row["claimed_at"] == "2026-03-24T00:10:01Z"
+
+
+def test_claim_shared_cache_entry_auto_retries_retryable_failed_entry_once(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="failed", retryable=True, auto_retry_count=0)
+
+    claimed_row = claim_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        claimed_by="worker-b",
+        claimed_at="2026-03-24T00:06:00Z",
+        lease_duration_seconds=300,
+    )
+
+    assert claimed_row["status"] == "running"
+    assert claimed_row["auto_retry_count"] == "1"
+    assert claimed_row["retryable"] == "0"
+
+
+def test_claim_shared_cache_entry_rejects_completed_entry(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="completed")
+
+    with pytest.raises(ValueError, match="cache_key is not claimable"):
+        claim_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            claimed_by="worker-a",
+            claimed_at="2026-03-24T00:01:00Z",
+            lease_duration_seconds=300,
+        )
+
+
+def test_claim_shared_cache_entry_rejects_non_stale_running_entry(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="running")
+
+    with pytest.raises(ValueError, match="cache_key is not claimable"):
+        claim_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            claimed_by="worker-b",
+            claimed_at="2026-03-24T00:05:00Z",
+            lease_duration_seconds=300,
+        )
+
+
+def test_claim_shared_cache_entry_rejects_non_retryable_failed_entry(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="failed", retryable=False, auto_retry_count=0)
+
+    with pytest.raises(ValueError, match="cache_key is not claimable"):
+        claim_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            claimed_by="worker-b",
+            claimed_at="2026-03-24T00:06:00Z",
+            lease_duration_seconds=300,
+        )
+
+
+def test_claim_shared_cache_entry_rejects_failed_entry_after_auto_retry_limit(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="failed", retryable=True, auto_retry_count=1)
+
+    with pytest.raises(ValueError, match="cache_key is not claimable"):
+        claim_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            claimed_by="worker-b",
+            claimed_at="2026-03-24T00:06:00Z",
+            lease_duration_seconds=300,
+        )
+
+
+def test_heartbeat_shared_cache_entry_rejects_mismatched_owner(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="running")
+
+    with pytest.raises(ValueError, match="matching claimed_by"):
+        heartbeat_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            claimed_by="worker-b",
+            heartbeat_at="2026-03-24T00:02:00Z",
+            lease_duration_seconds=300,
+        )
+
+
+def test_is_shared_cache_entry_stale_uses_strict_lease_boundary(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    running_row = _seed_shared_cache_entry(db_path, status="running")
+
+    assert is_shared_cache_entry_stale(running_row, now="2026-03-24T00:10:00Z") is False
+    assert is_shared_cache_entry_stale(running_row, now="2026-03-24T00:10:01Z") is True
+
+
+def test_heartbeat_shared_cache_entry_is_not_stale_immediately_after_heartbeat(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _seed_shared_cache_entry(db_path, status="running")
+
+    heartbeat_row = heartbeat_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        claimed_by="worker-a",
+        heartbeat_at="2026-03-24T00:03:00Z",
+        lease_duration_seconds=300,
+    )
+
+    assert is_shared_cache_entry_stale(heartbeat_row, now="2026-03-24T00:03:00Z") is False
+
+
+def test_claim_shared_cache_entry_rejects_running_entry_with_broken_lease_fields(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    initialize_shared_state_db(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO shared_cache_entries (
+                cache_key, cache_key_version, source_family, symbol, period_id, period_signature, status, created_at, updated_at,
+                claimed_at, claimed_by, lease_expires_at, last_heartbeat_at, auto_retry_count, retryable, last_error_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cache_a",
+                CACHE_KEY_VERSION,
+                "news",
+                "BTCUSD",
+                "p_alpha",
+                "sig_alpha",
+                "running",
+                "2026-03-24T00:00:00Z",
+                "2026-03-24T00:00:00Z",
+                "",
+                "worker-a",
+                "",
+                "2026-03-24T00:00:00Z",
+                0,
+                0,
+                "",
+            ),
+        )
+        connection.commit()
+
+    with pytest.raises(ValueError, match="running shared_cache_entry must include claimed_at"):
+        claim_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            claimed_by="worker-b",
+            claimed_at="2026-03-24T00:10:01Z",
+            lease_duration_seconds=300,
+        )
 
 
 def test_update_cache_metadata_status_applies_valid_transitions(tmp_path: Path) -> None:
@@ -1270,6 +1619,10 @@ def test_generate_research_manifest_run_excludes_running_and_keeps_pending_faile
         status="running",
         created_at="2026-03-24T00:00:00Z",
         updated_at="2026-03-24T00:01:00Z",
+        claimed_at="2026-03-24T00:01:00Z",
+        claimed_by="worker-a",
+        lease_expires_at="2026-03-24T00:06:00Z",
+        last_heartbeat_at="2026-03-24T00:01:00Z",
     )
     upsert_shared_cache_entry(
         shared_state_db_path,
