@@ -11,25 +11,34 @@ from trade_simulator.research_manifest import (
     CACHE_KEY_VERSION,
     CACHE_METADATA_SCHEMA_VERSION,
     DEFAULT_SHARED_CACHE_METADATA_PATH,
+    DEFAULT_SHARED_STATE_DB_PATH,
     ENGINE_VERSION,
     INPUT_SCHEMA_VERSION,
     RESULT_STATUS_PENDING,
     RESULT_STATUS_RUNNING,
+    SHARED_STATE_SCHEMA_VERSION,
     build_case_acquisition_links,
     build_initial_cache_metadata_rows,
     build_unresolved_acquisition_rows,
     build_acquisition_cache_key,
     build_acquisition_manifest_rows,
+    delete_legacy_shared_cache_metadata_csv,
     build_manifest_rows,
+    find_shared_cache_entry,
     generate_research_manifest_run,
     find_cache_metadata_row,
+    get_shared_state_schema_version,
+    initialize_shared_state_db,
     load_cache_metadata_rows,
+    load_shared_cache_entries,
     load_shared_cache_metadata_rows,
     load_grid_rows,
     load_period_rows,
     save_shared_cache_metadata_rows,
     select_eligible_signal_only_grids,
+    upsert_shared_cache_entry,
     update_cache_metadata_status,
+    update_shared_cache_entry_status,
     upsert_cache_metadata_row,
     validate_acquisition_status,
     validate_acquisition_status_transition,
@@ -624,6 +633,212 @@ def test_shared_cache_metadata_load_validate_upsert_and_search(tmp_path: Path) -
         "updated_at": "2026-03-24T00:00:00Z",
         "schema_version": CACHE_METADATA_SCHEMA_VERSION,
     }
+
+
+def test_initialize_shared_state_db_creates_sqlite_and_schema_version(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+
+    initialized_path = initialize_shared_state_db(db_path)
+
+    assert initialized_path == db_path
+    assert db_path.exists()
+    assert get_shared_state_schema_version(db_path) == SHARED_STATE_SCHEMA_VERSION
+
+
+def test_shared_state_default_path_is_fixed() -> None:
+    assert DEFAULT_SHARED_STATE_DB_PATH == Path("var/cache/external_signals/shared_state.sqlite3")
+
+
+def test_load_shared_cache_entries_returns_empty_list_for_empty_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+
+    initialize_shared_state_db(db_path)
+
+    assert load_shared_cache_entries(db_path) == []
+
+
+def test_shared_cache_entry_upsert_find_and_list_round_trip(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+
+    upserted_row = upsert_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="pending",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+
+    assert upserted_row == {
+        "cache_key": "cache_a",
+        "cache_key_version": CACHE_KEY_VERSION,
+        "source_family": "news",
+        "symbol": "BTCUSD",
+        "period_id": "p_alpha",
+        "period_signature": "sig_alpha",
+        "status": "pending",
+        "created_at": "2026-03-24T00:00:00Z",
+        "updated_at": "2026-03-24T00:00:00Z",
+    }
+    assert find_shared_cache_entry(db_path, cache_key="cache_a") == upserted_row
+    assert load_shared_cache_entries(db_path) == [upserted_row]
+
+
+def test_upsert_shared_cache_entry_updates_existing_row_for_same_cache_key(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+
+    upsert_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="pending",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+    updated_row = upsert_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="running",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:01:00Z",
+    )
+
+    assert updated_row["status"] == "running"
+    assert updated_row["created_at"] == "2026-03-24T00:00:00Z"
+    assert updated_row["updated_at"] == "2026-03-24T00:01:00Z"
+
+
+def test_update_shared_cache_entry_status_applies_valid_transition(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    upsert_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="pending",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+
+    updated_row = update_shared_cache_entry_status(
+        db_path,
+        cache_key="cache_a",
+        next_status="running",
+        updated_at="2026-03-24T00:01:00Z",
+    )
+
+    assert updated_row["status"] == "running"
+    assert updated_row["updated_at"] == "2026-03-24T00:01:00Z"
+
+
+def test_get_shared_state_schema_version_rejects_invalid_meta_value(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    initialize_shared_state_db(db_path)
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE shared_state_meta SET value = ? WHERE key = 'schema_version'",
+            ("shared_state_v999",),
+        )
+        connection.commit()
+
+    with pytest.raises(ValueError, match="shared state schema_version must be"):
+        get_shared_state_schema_version(db_path)
+
+
+def test_upsert_shared_cache_entry_rejects_invalid_source_family(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+
+    with pytest.raises(ValueError, match="source_family must be one of"):
+        upsert_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            source_family="podcast",
+            symbol="BTCUSD",
+            period_id="p_alpha",
+            period_signature="sig_alpha",
+            status="pending",
+            created_at="2026-03-24T00:00:00Z",
+            updated_at="2026-03-24T00:00:00Z",
+        )
+
+
+def test_upsert_shared_cache_entry_rejects_invalid_status(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+
+    with pytest.raises(ValueError, match="status must be one of"):
+        upsert_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            source_family="news",
+            symbol="BTCUSD",
+            period_id="p_alpha",
+            period_signature="sig_alpha",
+            status="queued",
+            created_at="2026-03-24T00:00:00Z",
+            updated_at="2026-03-24T00:00:00Z",
+        )
+
+
+def test_upsert_shared_cache_entry_rejects_inconsistent_duplicate_cache_key(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    upsert_shared_cache_entry(
+        db_path,
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="pending",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="shared_cache_entries row mismatch for cache_key cache_a: source_family"):
+        upsert_shared_cache_entry(
+            db_path,
+            cache_key="cache_a",
+            source_family="sns",
+            symbol="BTCUSD",
+            period_id="p_alpha",
+            period_signature="sig_alpha",
+            status="pending",
+            created_at="2026-03-24T00:00:00Z",
+            updated_at="2026-03-24T00:01:00Z",
+        )
+
+
+def test_delete_legacy_shared_cache_metadata_csv_removes_file_when_present(tmp_path: Path) -> None:
+    legacy_csv_path = tmp_path / "shared" / "cache_metadata.csv"
+    legacy_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_csv_path.write_text("cache_key\nlegacy\n", encoding="utf-8")
+
+    deleted = delete_legacy_shared_cache_metadata_csv(legacy_csv_path)
+
+    assert deleted is True
+    assert not legacy_csv_path.exists()
+
+
+def test_delete_legacy_shared_cache_metadata_csv_is_safe_when_absent(tmp_path: Path) -> None:
+    legacy_csv_path = tmp_path / "shared" / "cache_metadata.csv"
+
+    deleted = delete_legacy_shared_cache_metadata_csv(legacy_csv_path)
+
+    assert deleted is False
 
 
 def test_update_cache_metadata_status_applies_valid_transitions(tmp_path: Path) -> None:

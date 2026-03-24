@@ -5,6 +5,7 @@ import hashlib
 import json
 import secrets
 import shutil
+import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -14,7 +15,9 @@ INPUT_SCHEMA_VERSION = "research_manifest_input_v1"
 ENGINE_VERSION = "research_manifest_dry_run_v1"
 CACHE_KEY_VERSION = "acquisition_cache_v1"
 CACHE_METADATA_SCHEMA_VERSION = "cache_metadata_v1"
+SHARED_STATE_SCHEMA_VERSION = "shared_state_v1"
 DEFAULT_SHARED_CACHE_METADATA_PATH = Path("var/cache/external_signals/cache_metadata.csv")
+DEFAULT_SHARED_STATE_DB_PATH = Path("var/cache/external_signals/shared_state.sqlite3")
 
 RESULT_STATUS_PENDING = "pending"
 RESULT_STATUS_RUNNING = "running"
@@ -166,6 +169,18 @@ CASE_ACQUISITION_LINK_COLUMNS = (
     "cache_key",
 )
 
+SHARED_CACHE_ENTRY_COLUMNS = (
+    "cache_key",
+    "cache_key_version",
+    "source_family",
+    "symbol",
+    "period_id",
+    "period_signature",
+    "status",
+    "created_at",
+    "updated_at",
+)
+
 
 @dataclass(frozen=True)
 class ResearchManifestRun:
@@ -191,6 +206,14 @@ class ResearchManifestRun:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _connect_shared_state_db(db_path: str | Path) -> sqlite3.Connection:
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    return connection
 
 
 def generate_run_id(now: datetime | None = None) -> str:
@@ -301,6 +324,12 @@ def validate_result_status(status: str) -> str:
 
 def validate_acquisition_status(status: str) -> str:
     return validate_result_status(status)
+
+
+def validate_source_family(source_family: str) -> str:
+    if source_family not in ALLOWED_SOURCE_FAMILIES:
+        raise ValueError(f"source_family must be one of: {', '.join(ALLOWED_SOURCE_FAMILIES)}")
+    return source_family
 
 
 def validate_acquisition_status_transition(current_status: str, next_status: str) -> str:
@@ -547,6 +576,234 @@ def build_acquisition_cache_key(
 
 def build_initial_cache_metadata_rows() -> list[dict[str, object]]:
     return []
+
+
+def initialize_shared_state_db(
+    db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
+) -> Path:
+    path = Path(db_path)
+    with _connect_shared_state_db(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shared_state_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shared_cache_entries (
+                cache_key TEXT PRIMARY KEY,
+                cache_key_version TEXT NOT NULL,
+                source_family TEXT NOT NULL CHECK (source_family IN ('news', 'sns')),
+                symbol TEXT NOT NULL,
+                period_id TEXT NOT NULL,
+                period_signature TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO shared_state_meta(key, value)
+            VALUES ('schema_version', ?)
+            ON CONFLICT(key) DO NOTHING
+            """,
+            (SHARED_STATE_SCHEMA_VERSION,),
+        )
+        connection.commit()
+    return path
+
+
+def get_shared_state_schema_version(
+    db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
+) -> str:
+    path = initialize_shared_state_db(db_path)
+    with _connect_shared_state_db(path) as connection:
+        row = connection.execute(
+            "SELECT value FROM shared_state_meta WHERE key = 'schema_version'"
+        ).fetchone()
+    if row is None:
+        raise ValueError("shared_state_meta must include schema_version")
+    schema_version = str(row["value"])
+    if schema_version != SHARED_STATE_SCHEMA_VERSION:
+        raise ValueError(f"shared state schema_version must be {SHARED_STATE_SCHEMA_VERSION}")
+    return schema_version
+
+
+def _normalize_shared_cache_entry(row: dict[str, str]) -> dict[str, str]:
+    normalized_row = {
+        "cache_key": _parse_required_text(row, "cache_key"),
+        "cache_key_version": _parse_required_text(row, "cache_key_version"),
+        "source_family": validate_source_family(_parse_required_text(row, "source_family")),
+        "symbol": _parse_required_text(row, "symbol"),
+        "period_id": _parse_required_text(row, "period_id"),
+        "period_signature": _parse_required_text(row, "period_signature"),
+        "status": validate_acquisition_status(_parse_required_text(row, "status")),
+        "created_at": _parse_required_text(row, "created_at"),
+        "updated_at": _parse_required_text(row, "updated_at"),
+    }
+    if normalized_row["cache_key_version"] != CACHE_KEY_VERSION:
+        raise ValueError(f"cache_key_version must be {CACHE_KEY_VERSION}")
+    return normalized_row
+
+
+def load_shared_cache_entries(
+    db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
+) -> list[dict[str, str]]:
+    path = initialize_shared_state_db(db_path)
+    get_shared_state_schema_version(path)
+    with _connect_shared_state_db(path) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT {', '.join(SHARED_CACHE_ENTRY_COLUMNS)}
+            FROM shared_cache_entries
+            ORDER BY cache_key
+            """
+        ).fetchall()
+    return [
+        _normalize_shared_cache_entry({column: "" if row[column] is None else str(row[column]) for column in SHARED_CACHE_ENTRY_COLUMNS})
+        for row in rows
+    ]
+
+
+def find_shared_cache_entry(
+    db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
+    *,
+    cache_key: str,
+) -> dict[str, str] | None:
+    path = initialize_shared_state_db(db_path)
+    get_shared_state_schema_version(path)
+    with _connect_shared_state_db(path) as connection:
+        row = connection.execute(
+            f"""
+            SELECT {', '.join(SHARED_CACHE_ENTRY_COLUMNS)}
+            FROM shared_cache_entries
+            WHERE cache_key = ?
+            """,
+            (cache_key,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _normalize_shared_cache_entry(
+        {column: "" if row[column] is None else str(row[column]) for column in SHARED_CACHE_ENTRY_COLUMNS}
+    )
+
+
+def upsert_shared_cache_entry(
+    db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
+    *,
+    cache_key: str,
+    source_family: str,
+    symbol: str,
+    period_id: str,
+    period_signature: str,
+    status: str,
+    created_at: str,
+    updated_at: str,
+) -> dict[str, str]:
+    path = initialize_shared_state_db(db_path)
+    get_shared_state_schema_version(path)
+    new_row = _normalize_shared_cache_entry(
+        {
+            "cache_key": cache_key,
+            "cache_key_version": CACHE_KEY_VERSION,
+            "source_family": source_family,
+            "symbol": symbol,
+            "period_id": period_id,
+            "period_signature": period_signature,
+            "status": status,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }
+    )
+    existing_row = find_shared_cache_entry(path, cache_key=cache_key)
+    if existing_row is not None:
+        immutable_columns = (
+            "cache_key",
+            "cache_key_version",
+            "source_family",
+            "symbol",
+            "period_id",
+            "period_signature",
+            "created_at",
+        )
+        for column in immutable_columns:
+            if existing_row[column] != new_row[column]:
+                raise ValueError(f"shared_cache_entries row mismatch for cache_key {cache_key}: {column}")
+
+    with _connect_shared_state_db(path) as connection:
+        connection.execute(
+            """
+            INSERT INTO shared_cache_entries (
+                cache_key,
+                cache_key_version,
+                source_family,
+                symbol,
+                period_id,
+                period_signature,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                status=excluded.status,
+                updated_at=excluded.updated_at
+            """,
+            (
+                new_row["cache_key"],
+                new_row["cache_key_version"],
+                new_row["source_family"],
+                new_row["symbol"],
+                new_row["period_id"],
+                new_row["period_signature"],
+                new_row["status"],
+                new_row["created_at"],
+                new_row["updated_at"],
+            ),
+        )
+        connection.commit()
+    return find_shared_cache_entry(path, cache_key=cache_key)  # type: ignore[return-value]
+
+
+def update_shared_cache_entry_status(
+    db_path: str | Path = DEFAULT_SHARED_STATE_DB_PATH,
+    *,
+    cache_key: str,
+    next_status: str,
+    updated_at: str,
+) -> dict[str, str]:
+    path = initialize_shared_state_db(db_path)
+    get_shared_state_schema_version(path)
+    existing_row = find_shared_cache_entry(path, cache_key=cache_key)
+    if existing_row is None:
+        raise ValueError(f"cache_key not found in shared_cache_entries: {cache_key}")
+    validate_acquisition_status_transition(existing_row["status"], next_status)
+    with _connect_shared_state_db(path) as connection:
+        connection.execute(
+            """
+            UPDATE shared_cache_entries
+            SET status = ?, updated_at = ?
+            WHERE cache_key = ?
+            """,
+            (next_status, updated_at, cache_key),
+        )
+        connection.commit()
+    return find_shared_cache_entry(path, cache_key=cache_key)  # type: ignore[return-value]
+
+
+def delete_legacy_shared_cache_metadata_csv(
+    legacy_csv_path: str | Path = DEFAULT_SHARED_CACHE_METADATA_PATH,
+) -> bool:
+    path = Path(legacy_csv_path)
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
 
 
 def load_cache_metadata_rows(csv_path: str | Path) -> list[dict[str, str]]:
