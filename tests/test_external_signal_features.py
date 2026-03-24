@@ -7,6 +7,7 @@ from trade_simulator.external_signal_features import (
     SOURCE_ADJUSTMENT_CONFIGS,
     SOURCE_BASE_TIME_WEIGHT_PROFILES,
     build_external_feature_signals,
+    build_external_signal_consumption_features,
     build_external_feature_timeline,
     prepare_external_signal_manual_case,
 )
@@ -114,6 +115,44 @@ def test_build_external_feature_timeline_supports_delayed_peak_source_profile() 
 
     assert feature_timeline["series"]["matching_signal_count"] == [1, 0, 0, 0, 0, 0]
     assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([0.1, 0.3, 0.8, 1.0, 0.8, 0.5])
+
+
+def test_build_external_signal_consumption_features_rebuilds_matching_series_from_symbol_and_topic() -> None:
+    feature_timeline = build_external_feature_timeline(
+        [
+            "2024-01-01T01:00:00Z",
+            "2024-01-01T02:00:00Z",
+            "2024-01-01T03:00:00Z",
+        ],
+        [
+            build_completed_summary(
+                signal_type="news",
+                source="coindesk_rss",
+                symbol_distribution={"BTCUSDT": 2},
+                topic_distribution={"policy": 1},
+            ),
+            build_completed_summary(
+                ended_at="2024-01-01T01:15:00Z",
+                signal_type="news",
+                source="sec_press_releases_rss",
+                symbol_distribution={"ETHUSDT": 3},
+                topic_distribution={"policy": 2},
+            ),
+        ],
+        symbol="BTC/USDT",
+        topics=["policy"],
+    )
+
+    consumption_features = build_external_signal_consumption_features(feature_timeline)
+
+    assert consumption_features["series"]["matching_signal_count"] == feature_timeline["series"]["matching_signal_count"]
+    assert consumption_features["series"]["weighted_matching_signal_count"] == pytest.approx(
+        feature_timeline["series"]["weighted_matching_signal_count"]
+    )
+    assert consumption_features["summary"]["matching_definition"] == {
+        "raw": "symbol_signal_count + topic_signal_count",
+        "weighted": "weighted_symbol_signal_count + weighted_topic_signal_count",
+    }
 
 
 def test_build_external_feature_timeline_sums_weighted_contributions_when_runs_overlap() -> None:
@@ -707,6 +746,41 @@ def test_build_external_feature_signals_uses_weighted_activity_and_exits_after_q
     assert exit_signals == [False, False, False, False, True, False, False]
 
 
+def test_build_external_feature_signals_accepts_timeline_and_consumption_features_with_same_result() -> None:
+    feature_timeline = build_external_feature_timeline(
+        [
+            "2024-01-01T01:00:00Z",
+            "2024-01-01T02:00:00Z",
+            "2024-01-01T03:00:00Z",
+        ],
+        [
+            build_completed_summary(
+                signal_type="news",
+                source="coindesk_rss",
+                symbol_distribution={"BTCUSDT": 1},
+                topic_distribution={"policy": 1},
+            )
+        ],
+        symbol="BTC/USDT",
+        topics=["policy"],
+    )
+    consumption_features = build_external_signal_consumption_features(feature_timeline)
+
+    timeline_entry_signals, timeline_exit_signals = build_external_feature_signals(
+        feature_timeline,
+        entry_count_threshold=1.5,
+        exit_after_inactive_periods=1,
+    )
+    consumption_entry_signals, consumption_exit_signals = build_external_feature_signals(
+        consumption_features,
+        entry_count_threshold=1.5,
+        exit_after_inactive_periods=1,
+    )
+
+    assert timeline_entry_signals == consumption_entry_signals == [True, False, False]
+    assert timeline_exit_signals == consumption_exit_signals == [False, True, False]
+
+
 def test_prepare_external_signal_manual_case_uses_weighted_feature_series_for_manual_strategy() -> None:
     prepared_case = prepare_external_signal_manual_case(
         {
@@ -749,6 +823,10 @@ def test_prepare_external_signal_manual_case_uses_weighted_feature_series_for_ma
     assert prepared_case["exit_signals"] == [False, False, False]
     assert prepared_case["external_signal_features"]["series"]["matching_signal_count"] == [0, 2, 0]
     assert prepared_case["external_signal_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 0.28, 0.84])
+    assert prepared_case["external_signal_consumption_features"]["series"]["matching_signal_count"] == [0, 2, 0]
+    assert prepared_case["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == pytest.approx(
+        [0.0, 0.28, 0.84]
+    )
 
 
 def test_prepare_external_signal_manual_case_rejects_conflicting_non_manual_strategy() -> None:

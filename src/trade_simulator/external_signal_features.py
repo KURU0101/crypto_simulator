@@ -494,6 +494,88 @@ def _finalize_feature_series(series: dict[str, list[int] | list[float]]) -> dict
     }
 
 
+def _build_matching_consumption_series(series: dict) -> dict:
+    symbol_signal_count = list(series["symbol_signal_count"])
+    topic_signal_count = list(series["topic_signal_count"])
+    matching_signal_count = [
+        symbol_count + topic_count
+        for symbol_count, topic_count in zip(symbol_signal_count, topic_signal_count)
+    ]
+
+    weighted_symbol_signal_count = list(series["weighted_symbol_signal_count"])
+    weighted_topic_signal_count = list(series["weighted_topic_signal_count"])
+    weighted_matching_signal_count = [
+        symbol_count + topic_count
+        for symbol_count, topic_count in zip(weighted_symbol_signal_count, weighted_topic_signal_count)
+    ]
+
+    return {
+        "symbol_signal_count": symbol_signal_count,
+        "topic_signal_count": topic_signal_count,
+        "matching_signal_count": matching_signal_count,
+        "matching_run_count": list(series["matching_run_count"]),
+        "weighted_symbol_signal_count": weighted_symbol_signal_count,
+        "weighted_topic_signal_count": weighted_topic_signal_count,
+        "weighted_matching_signal_count": weighted_matching_signal_count,
+        "weighted_matching_run_count": list(series["weighted_matching_run_count"]),
+        "has_activity": [count > 0 for count in matching_signal_count],
+        "has_weighted_activity": [count > 0.0 for count in weighted_matching_signal_count],
+    }
+
+
+def build_external_signal_consumption_features(feature_timeline: object) -> dict:
+    if not isinstance(feature_timeline, dict):
+        raise TypeError("feature_timeline must be a dict")
+
+    series = feature_timeline.get("series")
+    if not isinstance(series, dict):
+        raise ValueError("feature_timeline must include a series dict")
+
+    required_fields = (
+        "symbol_signal_count",
+        "topic_signal_count",
+        "matching_run_count",
+        "weighted_symbol_signal_count",
+        "weighted_topic_signal_count",
+        "weighted_matching_run_count",
+    )
+    for field_name in required_fields:
+        if not isinstance(series.get(field_name), list):
+            raise ValueError(f"feature_timeline series must include {field_name}")
+
+    # Stage one migration rule: matching remains defined as symbol + topic.
+    consumption_series = _build_matching_consumption_series(series)
+    return {
+        "return_timestamps": list(feature_timeline.get("return_timestamps", [])),
+        "selected_symbol": feature_timeline.get("selected_symbol"),
+        "selected_topics": list(feature_timeline.get("selected_topics", [])),
+        "series": consumption_series,
+        "summary": {
+            "matching_definition": {
+                "raw": "symbol_signal_count + topic_signal_count",
+                "weighted": "weighted_symbol_signal_count + weighted_topic_signal_count",
+            }
+        },
+    }
+
+
+def _coerce_consumption_features(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise TypeError("consumption_features must be a dict")
+
+    series = value.get("series")
+    if not isinstance(series, dict):
+        raise ValueError("consumption_features must include a series dict")
+
+    if any(field_name in value for field_name in ("time_weight_profiles", "adjustments", "selected_symbol", "selected_topics")):
+        return build_external_signal_consumption_features(value)
+
+    if isinstance(series.get("weighted_matching_signal_count"), list):
+        return value
+
+    return build_external_signal_consumption_features(value)
+
+
 def build_external_feature_timeline(
     return_timestamps: object,
     summaries: object,
@@ -570,25 +652,22 @@ def build_external_feature_timeline(
 
 
 def build_external_feature_signals(
-    feature_timeline: object,
+    consumption_features: object,
     *,
     entry_count_threshold: object = 1,
     exit_after_inactive_periods: object = 1,
 ) -> tuple[list[bool], list[bool]]:
-    if not isinstance(feature_timeline, dict):
-        raise TypeError("feature_timeline must be a dict")
     if isinstance(entry_count_threshold, bool) or not isinstance(entry_count_threshold, Real) or entry_count_threshold <= 0:
         raise ValueError("entry_count_threshold must be a positive number")
     if not isinstance(exit_after_inactive_periods, int) or exit_after_inactive_periods <= 0:
         raise ValueError("exit_after_inactive_periods must be a positive int")
 
-    series = feature_timeline.get("series")
-    if not isinstance(series, dict):
-        raise ValueError("feature_timeline must include a series dict")
+    resolved_consumption_features = _coerce_consumption_features(consumption_features)
+    series = resolved_consumption_features.get("series")
 
     matching_signal_count = series.get("weighted_matching_signal_count")
     if not isinstance(matching_signal_count, list):
-        raise ValueError("feature_timeline series must include weighted_matching_signal_count")
+        raise ValueError("consumption_features series must include weighted_matching_signal_count")
 
     entry_signals = [False] * len(matching_signal_count)
     exit_signals = [False] * len(matching_signal_count)
@@ -654,8 +733,9 @@ def prepare_external_signal_manual_case(
         run_metrics_by_run_id=external_signal.get("run_metrics_by_run_id"),
         feature_overrides=external_signal.get("feature_overrides"),
     )
+    consumption_features = build_external_signal_consumption_features(feature_timeline)
     entry_signals, exit_signals = build_external_feature_signals(
-        feature_timeline,
+        consumption_features,
         entry_count_threshold=external_signal.get("entry_count_threshold", 1),
         exit_after_inactive_periods=external_signal.get("exit_after_inactive_periods", 1),
     )
@@ -665,11 +745,13 @@ def prepare_external_signal_manual_case(
     prepared_case["entry_signals"] = entry_signals
     prepared_case["exit_signals"] = exit_signals
     prepared_case["external_signal_features"] = feature_timeline
+    prepared_case["external_signal_consumption_features"] = consumption_features
     return prepared_case
 
 
 __all__ = [
     "build_external_feature_signals",
+    "build_external_signal_consumption_features",
     "build_external_feature_timeline",
     "prepare_external_signal_manual_case",
 ]
