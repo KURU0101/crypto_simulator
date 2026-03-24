@@ -112,3 +112,80 @@ external signal 周辺テストの考え方:
 - integrated observer の「共通項目のみ依存」
 - `source_specific` を使った source 差分の隔離
 - `.venv/bin/python3 -m pytest` で再現できるテスト運用
+
+## Session Handoff
+
+### Current responsibility boundary
+
+- timeline:
+  - `external_signal_features` が返す `feature_timeline`
+  - 正式責務は基礎系列のみ
+  - 現在の `series` は `symbol_signal_count`, `topic_signal_count`, `weighted_symbol_signal_count`, `weighted_topic_signal_count`
+  - matching 系列や activity 系列は持たない
+- consumption_features:
+  - `external_signal_consumption_features` が返す消費前処理結果
+  - matching 系列の正式参照先
+  - 現在の正式な派生系列は `matching_signal_count`, `weighted_matching_signal_count`, `matching_run_count`, `weighted_matching_run_count`, `has_activity`, `has_weighted_activity`
+  - signal 判定はここを読む
+- observability:
+  - `adjustments.applied_runs`, `raw_contribution`, `period_contributions` などの説明用ログ
+  - matching 関連の説明値はここに残してよい
+  - timeline `series` の一部ではない
+
+### External signal consumption stage status
+
+- Stage 1 完了:
+  - `timeline -> consumption_features -> signals` の流れを導入
+  - consumption_features 側で matching を再生成可能にした
+- Stage 2 完了:
+  - matching 派生の正式参照先を `external_signal_consumption_features.series` に移行
+  - timeline 側の matching 派生を一時隔離した
+- Stage 3 完了:
+  - timeline から matching 派生の移行層を完全削除
+  - timeline の責務を基礎系列中心で確定
+  - matching 派生は consumption_features 側に一本化
+- 次は Stage 4 を検討する段階:
+  - 合成導入が主タスク
+
+### Matching status
+
+- matching 系は timeline から除去済み
+- matching 系の正式参照先は `external_signal_consumption_features.series`
+- timeline から消した対象:
+  - `matching_signal_count`
+  - `weighted_matching_signal_count`
+  - `matching_run_count`
+  - `weighted_matching_run_count`
+  - `has_activity`
+  - `has_weighted_activity`
+- signal 判定と real-data 導線は consumption_features ベースで動作済み
+
+### Next task candidates
+
+- 主タスクは合成導入
+- 具体的には、基礎系列をどう消費用にまとめるかを `consumption_features` 側で扱う設計を進める
+- まずは matching の延長ではなく、合成仕様の明文化と比較可能性の設計が必要
+
+### Not doing now
+
+- DSL
+- 複数条件評価器
+- source別本格分岐
+- `simulate` 側変更
+
+### Questions for next session
+
+- 合成仕様:
+  - symbol / topic / run_count / weighted 系列をどう合成するか
+- matching をどう扱うか:
+  - matching を今後も単純加算の基準系列として残すか
+  - あるいは比較用の 1 つの派生系列として扱うか
+- どこまで比較可能にするか:
+  - 単一合成系列だけ比較するのか
+  - 複数候補合成を並べて比較できるようにするのか
+
+### Implementation notes
+
+- timeline は feature timeline、consumption_features は消費用派生系列、observability は説明用ログ、という境界を維持する
+- matching 系の run count は timeline から直接持たず、consumption_features 側で `applied_runs` から再構成している
+- observability の matching 関連値は残しているため、説明可能性は維持されている
