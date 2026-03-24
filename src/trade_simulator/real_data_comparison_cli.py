@@ -6,6 +6,8 @@ import json
 from trade_simulator.comparison import run_comparisons
 from trade_simulator.config import load_config
 from trade_simulator.data import load_data_sources_config, load_returns_by_symbol
+from trade_simulator.external_signal_features import prepare_external_signal_manual_case
+from trade_simulator.integrated_observer import scan_saved_signal_summaries
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,12 +53,28 @@ def prepare_cases_with_real_data_returns(
 
     returns_payload = returns_by_symbol[selected_symbol]
     prepared_cases = []
+    summaries_by_root_dir: dict[str, list[dict]] = {}
 
     for case in cases:
         prepared_case = dict(case)
         prepared_case["returns"] = list(returns_payload["returns"])
         if "simulation_name" not in prepared_case and "name" in prepared_case:
             prepared_case["simulation_name"] = prepared_case["name"]
+        if "external_signal" in prepared_case:
+            external_signal = prepared_case["external_signal"]
+            if not isinstance(external_signal, dict):
+                raise ValueError("external_signal must be a dict")
+            summary_root_dir = external_signal.get("summary_root_dir", "var")
+            if not isinstance(summary_root_dir, str) or not summary_root_dir.strip():
+                raise TypeError("external_signal summary_root_dir must be a non-empty string")
+            if summary_root_dir not in summaries_by_root_dir:
+                summaries_by_root_dir[summary_root_dir] = scan_saved_signal_summaries(summary_root_dir)
+            prepared_case = prepare_external_signal_manual_case(
+                prepared_case,
+                return_timestamps=returns_payload["return_timestamps"],
+                symbol=selected_symbol,
+                summaries=summaries_by_root_dir[summary_root_dir],
+            )
         prepared_cases.append(prepared_case)
 
     data_summary = {
