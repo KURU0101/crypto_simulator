@@ -556,14 +556,73 @@ def test_load_real_data_comparison_config_reads_external_signal_series_compariso
         "matching_high",
         "blended_s07_t03_low",
         "blended_s07_t03_baseline",
-        "blended_s07_t03_high",
         "blended_s05_t05_low",
         "blended_s05_t05_baseline",
-        "blended_s05_t05_high",
-        "blended_s03_t07_low",
         "blended_s03_t07_baseline",
-        "blended_s03_t07_high",
     ]
+
+
+def test_external_signal_series_comparison_example_keeps_standard_case_metadata() -> None:
+    data_source, cases = load_real_data_comparison_config("config/real_data_external_signal_series_comparison.example.json")
+    _, prepared_cases = prepare_cases_with_real_data_returns(data_source, cases)
+
+    assert len(prepared_cases) == 8
+
+    external_signal_by_name = {
+        case["name"]: case["external_signal"]
+        for case in prepared_cases
+    }
+
+    assert external_signal_by_name["matching_low"]["consumption_series_name"] == "weighted_matching_signal_count"
+    assert external_signal_by_name["matching_baseline"]["entry_count_threshold"] == 1.4
+    assert external_signal_by_name["matching_high"]["consumption_series_name"] == "weighted_matching_signal_count"
+
+    assert external_signal_by_name["blended_s07_t03_low"]["consumption_series_name"] == "blended_weighted_signal_count"
+    assert external_signal_by_name["blended_s07_t03_low"]["blended_weights"] == {"symbol": 0.7, "topic": 0.3}
+    assert external_signal_by_name["blended_s05_t05_baseline"]["entry_count_threshold"] == 1.4
+    assert external_signal_by_name["blended_s05_t05_baseline"]["blended_weights"] == {"symbol": 0.5, "topic": 0.5}
+    assert external_signal_by_name["blended_s03_t07_baseline"]["blended_weights"] == {"symbol": 0.3, "topic": 0.7}
+
+
+def test_external_signal_series_comparison_example_preserves_no_trade_summary_shape() -> None:
+    data_source, cases = load_real_data_comparison_config("config/real_data_external_signal_series_comparison.example.json")
+    _, prepared_cases = prepare_cases_with_real_data_returns(data_source, cases)
+
+    from trade_simulator.comparison import run_comparisons
+
+    results = run_comparisons(prepared_cases)
+    results_by_name = {result["name"]: result for result in results}
+
+    no_trade_case = results_by_name["blended_s07_t03_baseline"]
+    assert no_trade_case["trade_count"] == 0
+    assert no_trade_case["signal_summary"] == {
+        "entry_signal_count": 0,
+        "exit_signal_count": 0,
+        "entry_signal_indexes": [],
+        "exit_signal_indexes": [],
+        "entry_signal_timestamps": [],
+        "exit_signal_timestamps": [],
+    }
+
+    baseline_case = results_by_name["blended_s03_t07_baseline"]
+    assert baseline_case["external_signal"] == {
+        "consumption_series_name": "blended_weighted_signal_count",
+        "entry_count_threshold": 1.4,
+        "blended_weights": {
+            "symbol": 0.3,
+            "topic": 0.7,
+        },
+        "blended_definition": {
+            "base_series": [
+                "weighted_symbol_signal_count",
+                "weighted_topic_signal_count",
+            ],
+            "weights": {
+                "symbol_weight": 0.3,
+                "topic_weight": 0.7,
+            },
+        },
+    }
 
 
 def test_market_data_cli_main_prints_summary(capsys: pytest.CaptureFixture[str]) -> None:

@@ -43,6 +43,8 @@ python3 scripts/run_real_data_comparisons.py --config config/real_data_compariso
 python3 scripts/run_real_data_comparisons.py --config config/real_data_external_signal_series_comparison.example.json
 ```
 
+`config/real_data_external_signal_series_comparison.example.json` は external signal comparison の標準 8 ケースです。現時点の第一候補は `matching_baseline` (`weighted_matching_signal_count` + `entry_count_threshold=1.4`) ですが、これは比較上の主戦略候補であり、ロジック既定値として固定したものではありません。
+
 疑似リアルタイム再生の最小実行例:
 
 ```bash
