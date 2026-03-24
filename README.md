@@ -140,6 +140,13 @@ source .venv/bin/activate
 python3 scripts/run_evaluation_market_data.py --source binance_spot --symbol BTCUSDT --start 2024-01-01T00:00:00Z --end 2024-01-01T02:00:00Z --interval 1h
 ```
 
+単一 period × 単一 case の最小評価実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_evaluation_case.py --source binance_spot --symbol BTCUSDT --start 2024-01-01T00:00:00Z --end 2024-01-01T03:00:00Z --interval 1h --case-config path/to/case.json
+```
+
 ## 手動確認
 
 `python3 scripts/run_simulation.py --config config/simulation.example.json` を実行し、出力 JSON の以下を確認します。
