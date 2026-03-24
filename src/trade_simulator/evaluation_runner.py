@@ -15,7 +15,7 @@ class EmptyReturnsError(EvaluationRunnerError):
     """Raised when OHLCV data cannot produce a non-empty returns series."""
 
 
-def _prepare_single_case(case_config: object) -> dict:
+def prepare_single_case(case_config: object) -> dict:
     if not isinstance(case_config, dict):
         raise ValueError("case config must be a dict")
     if "name" not in case_config:
@@ -26,6 +26,33 @@ def _prepare_single_case(case_config: object) -> dict:
     if "simulation_name" not in prepared_case:
         prepared_case["simulation_name"] = prepared_case["name"]
     return prepared_case
+
+
+def build_returns_payload_from_rows(ohlcv_rows: object) -> dict:
+    returns_payload = build_close_to_close_returns(ohlcv_rows)
+    if not returns_payload["returns"]:
+        raise EmptyReturnsError("returns must not be empty for evaluation")
+    return returns_payload
+
+
+def evaluate_prepared_case_with_returns(
+    *,
+    prepared_case: dict,
+    returns_payload: dict[str, object],
+) -> dict[str, object]:
+    executable_case = dict(prepared_case)
+    executable_case["returns"] = list(returns_payload["returns"])
+
+    case_name = str(prepared_case["name"])
+    execution_config = {key: value for key, value in executable_case.items() if key != "name"}
+    result = run_case(execution_config)
+    summary = summarize_case_result(case_name, result)
+    return {
+        "case_name": case_name,
+        "returns_count": len(returns_payload["returns"]),
+        "price_basis": returns_payload["price_basis"],
+        "summary": summary,
+    }
 
 
 def _build_output_payload(
@@ -66,7 +93,7 @@ def run_single_case_evaluation(
     period_signature: str = "",
     fetcher=None,
 ) -> dict[str, object]:
-    prepared_case = _prepare_single_case(case_config)
+    prepared_case = prepare_single_case(case_config)
     market_data_result = resolve_evaluation_market_data(
         source=source,
         symbol=symbol,
@@ -78,20 +105,14 @@ def run_single_case_evaluation(
         period_signature=period_signature,
         fetcher=fetcher,
     )
-    returns_payload = build_close_to_close_returns(market_data_result["rows"])
-    if not returns_payload["returns"]:
-        raise EmptyReturnsError("returns must not be empty for evaluation")
-
-    executable_case = dict(prepared_case)
-    executable_case["returns"] = list(returns_payload["returns"])
-
-    case_name = str(prepared_case["name"])
-    execution_config = {key: value for key, value in executable_case.items() if key != "name"}
-    result = run_case(execution_config)
-    summary = summarize_case_result(case_name, result)
+    returns_payload = build_returns_payload_from_rows(market_data_result["rows"])
+    case_result = evaluate_prepared_case_with_returns(
+        prepared_case=prepared_case,
+        returns_payload=returns_payload,
+    )
     return _build_output_payload(
         market_data_result=market_data_result,
-        case_name=case_name,
+        case_name=str(case_result["case_name"]),
         returns_payload=returns_payload,
-        summary=summary,
+        summary=case_result["summary"],
     )

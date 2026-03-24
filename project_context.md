@@ -261,22 +261,22 @@ external signal 周辺テストの考え方:
 - 単一 period を明示引数で受け取り、market data acquisition key に基づいて fetch / reuse / normalized OHLCV 保存 / 再読込確認を行う最小導線を追加した
 - primary artifact を returns ではなく normalized OHLCV CSV に固定し、completed 更新条件を「保存成功 + 再読込成功 + 最小妥当性確認成功」に限定した
 - 単一 period × 単一 case について、保存済みまたは reuse された OHLCV から returns を生成し、既存 comparison の `run_case()` / `summarize_case_result()` を使って end-to-end 評価できる最小 runner を追加した
+- 複数 period × 複数 case について、period ごとに market data 解決と returns 生成を 1 回だけ行い、その returns を複数 case で共有して CSV と最小 JSON summary を出す batch runner を追加した
 
 ## Explicitly Not Done
 
 - `simulate` 実行との接続
-- 全結果 CSV 出力
-- 複数 case 一括実行
 - period CSV 本格統合
 - 複数 period の重複最適化
-- 複数 period 一括実行
-- batch orchestration
+- 大規模 batch orchestration
 - research_manifest との接続拡張
+- 同一 acquisition key の同時実行制御
+- schema_version 運用ルールの確定
 
 ## Next Tasks
 
 - market data 再利用導線を evaluation manifest / period CSV 入力へ接続する
-- 複数期間 × 複数パラメータの case 実行入口を追加する
-- case 単位の結果 CSV 出力を追加する
+- periods.csv / grids.csv と自然に接続できる入力設計へ拡張する
+- 大規模 batch orchestration と並列化の境界を決める
 - 同一 acquisition key の同時実行制御方針を決める
 - schema_version をどの変更で上げるかの運用ルールを決める
