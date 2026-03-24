@@ -553,6 +553,7 @@ def test_load_real_data_comparison_config_reads_external_signal_series_compariso
     assert [case["name"] for case in cases] == [
         "matching_low",
         "matching_baseline",
+        "matching_baseline_exit_relaxed",
         "matching_high",
         "blended_s07_t03_low",
         "blended_s07_t03_baseline",
@@ -566,7 +567,7 @@ def test_external_signal_series_comparison_example_keeps_standard_case_metadata(
     data_source, cases = load_real_data_comparison_config("config/real_data_external_signal_series_comparison.example.json")
     _, prepared_cases = prepare_cases_with_real_data_returns(data_source, cases)
 
-    assert len(prepared_cases) == 8
+    assert len(prepared_cases) == 9
 
     external_signal_by_name = {
         case["name"]: case["external_signal"]
@@ -575,6 +576,8 @@ def test_external_signal_series_comparison_example_keeps_standard_case_metadata(
 
     assert external_signal_by_name["matching_low"]["consumption_series_name"] == "weighted_matching_signal_count"
     assert external_signal_by_name["matching_baseline"]["entry_count_threshold"] == 1.4
+    assert external_signal_by_name["matching_baseline_exit_relaxed"]["entry_count_threshold"] == 1.4
+    assert external_signal_by_name["matching_baseline_exit_relaxed"]["exit_after_inactive_periods"] == 2
     assert external_signal_by_name["matching_high"]["consumption_series_name"] == "weighted_matching_signal_count"
 
     assert external_signal_by_name["blended_s07_t03_low"]["consumption_series_name"] == "blended_weighted_signal_count"

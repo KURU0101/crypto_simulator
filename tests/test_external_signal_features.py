@@ -901,6 +901,49 @@ def test_build_external_feature_signals_uses_weighted_activity_and_exits_after_q
     assert exit_signals == [False, False, False, False, True, False, False]
 
 
+def test_build_external_feature_signals_relaxes_matching_baseline_exit_by_one_period() -> None:
+    entry_signals, exit_signals = build_external_feature_signals(
+        {
+            "series": {
+                "weighted_matching_signal_count": [0.0, 1.4, 0.0, 0.0],
+            }
+        },
+        entry_count_threshold=1.4,
+        exit_after_inactive_periods=2,
+    )
+
+    assert entry_signals == [False, True, False, False]
+    assert exit_signals == [False, False, False, True]
+
+
+def test_build_external_feature_signals_exits_on_second_consecutive_inactive_period() -> None:
+    entry_signals, exit_signals = build_external_feature_signals(
+        {
+            "series": {
+                "weighted_matching_signal_count": [0.0, 1.4, 0.0, 1.4, 0.0, 0.0],
+            }
+        },
+        entry_count_threshold=1.4,
+        exit_after_inactive_periods=2,
+    )
+
+    assert entry_signals == [False, True, False, False, False, False]
+    assert exit_signals == [False, False, False, False, False, True]
+
+
+def test_build_external_feature_signals_rejects_invalid_exit_after_inactive_periods() -> None:
+    with pytest.raises(ValueError, match="exit_after_inactive_periods must be a positive int"):
+        build_external_feature_signals(
+            {
+                "series": {
+                    "weighted_matching_signal_count": [0.0, 1.4, 0.0],
+                }
+            },
+            entry_count_threshold=1.4,
+            exit_after_inactive_periods=0,
+        )
+
+
 def test_build_external_feature_signals_defaults_to_weighted_matching_signal_count() -> None:
     consumption_features = {
         "series": {
