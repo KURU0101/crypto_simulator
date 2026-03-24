@@ -155,10 +155,70 @@ def test_build_external_signal_consumption_features_rebuilds_matching_series_fro
 
     assert consumption_features["series"]["matching_signal_count"] == [3, 2, 0]
     assert consumption_features["series"]["weighted_matching_signal_count"] == pytest.approx([3.0, 4.1, 2.6])
+    assert consumption_features["series"]["blended_weighted_signal_count"] == pytest.approx([1.7, 1.79, 1.1])
     assert consumption_features["summary"]["matching_definition"] == {
         "raw": "symbol_signal_count + topic_signal_count",
         "weighted": "weighted_symbol_signal_count + weighted_topic_signal_count",
     }
+    assert consumption_features["summary"]["blended_definition"] == {
+        "base_series": [
+            "weighted_symbol_signal_count",
+            "weighted_topic_signal_count",
+        ],
+        "weights": {
+            "symbol_weight": 0.7,
+            "topic_weight": 0.3,
+        },
+    }
+
+
+def test_build_external_signal_consumption_features_builds_blended_weighted_series_for_symbol_only_case() -> None:
+    feature_timeline = build_external_feature_timeline(
+        [
+            "2024-01-01T01:00:00Z",
+            "2024-01-01T02:00:00Z",
+            "2024-01-01T03:00:00Z",
+        ],
+        [
+            build_completed_summary(
+                signal_type="news",
+                source="coindesk_rss",
+                symbol_distribution={"BTCUSDT": 2},
+                topic_distribution={},
+            )
+        ],
+        symbol="BTC/USDT",
+    )
+
+    consumption_features = build_external_signal_consumption_features(feature_timeline)
+
+    assert consumption_features["series"]["weighted_matching_signal_count"] == pytest.approx([2.0, 1.4, 0.8])
+    assert consumption_features["series"]["blended_weighted_signal_count"] == pytest.approx([1.4, 0.98, 0.56])
+
+
+def test_build_external_signal_consumption_features_builds_blended_weighted_series_for_topic_only_case() -> None:
+    feature_timeline = build_external_feature_timeline(
+        [
+            "2024-01-01T01:00:00Z",
+            "2024-01-01T02:00:00Z",
+            "2024-01-01T03:00:00Z",
+        ],
+        [
+            build_completed_summary(
+                signal_type="news",
+                source="coindesk_rss",
+                symbol_distribution={},
+                topic_distribution={"policy": 2},
+            )
+        ],
+        symbol="BTC/USDT",
+        topics=["policy"],
+    )
+
+    consumption_features = build_external_signal_consumption_features(feature_timeline)
+
+    assert consumption_features["series"]["weighted_matching_signal_count"] == pytest.approx([2.0, 1.4, 0.8])
+    assert consumption_features["series"]["blended_weighted_signal_count"] == pytest.approx([0.6, 0.42, 0.24])
 
 
 def test_build_external_feature_timeline_sums_weighted_contributions_when_runs_overlap() -> None:
@@ -764,6 +824,47 @@ def test_build_external_feature_signals_uses_weighted_activity_and_exits_after_q
     assert exit_signals == [False, False, False, False, True, False, False]
 
 
+def test_build_external_feature_signals_defaults_to_weighted_matching_signal_count() -> None:
+    consumption_features = {
+        "series": {
+            "weighted_matching_signal_count": [0.0, 0.8, 0.0],
+            "blended_weighted_signal_count": [0.0, 0.3, 0.8],
+        }
+    }
+
+    default_entry_signals, default_exit_signals = build_external_feature_signals(
+        consumption_features,
+        entry_count_threshold=0.5,
+        exit_after_inactive_periods=1,
+    )
+    explicit_entry_signals, explicit_exit_signals = build_external_feature_signals(
+        consumption_features,
+        entry_count_threshold=0.5,
+        exit_after_inactive_periods=1,
+        consumption_series_name="weighted_matching_signal_count",
+    )
+
+    assert default_entry_signals == explicit_entry_signals == [False, True, False]
+    assert default_exit_signals == explicit_exit_signals == [False, False, True]
+
+
+def test_build_external_feature_signals_can_use_blended_weighted_signal_count() -> None:
+    entry_signals, exit_signals = build_external_feature_signals(
+        {
+            "series": {
+                "weighted_matching_signal_count": [0.0, 0.8, 0.0],
+                "blended_weighted_signal_count": [0.0, 0.3, 0.8],
+            }
+        },
+        entry_count_threshold=0.5,
+        exit_after_inactive_periods=1,
+        consumption_series_name="blended_weighted_signal_count",
+    )
+
+    assert entry_signals == [False, False, True]
+    assert exit_signals == [False, False, False]
+
+
 def test_build_external_feature_signals_accepts_timeline_and_consumption_features_with_same_result() -> None:
     feature_timeline = build_external_feature_timeline(
         [
@@ -841,6 +942,50 @@ def test_prepare_external_signal_manual_case_uses_weighted_feature_series_for_ma
     assert prepared_case["exit_signals"] == [False, False, False]
     assert prepared_case["external_signal_consumption_features"]["series"]["matching_signal_count"] == [0, 2, 0]
     assert prepared_case["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 0.28, 0.84])
+
+
+def test_prepare_external_signal_manual_case_can_select_blended_consumption_series_for_signals() -> None:
+    prepared_case = prepare_external_signal_manual_case(
+        {
+            "name": "external_signal_blended_case",
+            "simulation_name": "external_signal_blended_case",
+            "initial_cash": 1000,
+            "fee_rate": 0.0,
+            "slippage_rate": 0.0,
+            "returns": [0.01, 0.02, -0.01],
+            "external_signal": {
+                "topics": ["policy"],
+                "entry_count_threshold": 0.5,
+                "exit_after_inactive_periods": 1,
+                "consumption_series_name": "blended_weighted_signal_count",
+                "run_metrics_by_run_id": {
+                    "run-youtube-1": {"attention_score": 1.0},
+                },
+            },
+        },
+        return_timestamps=[
+            "2024-01-01T01:00:00Z",
+            "2024-01-01T02:00:00Z",
+            "2024-01-01T03:00:00Z",
+        ],
+        symbol="BTC/USDT",
+        summaries=[
+            {
+                "run_id": "run-youtube-1",
+                "status": "completed",
+                "ended_at": "2024-01-01T01:30:00Z",
+                "signal_type": "sns",
+                "source": "youtube_channel_rss",
+                "symbol_distribution": {"BTCUSDT": 1},
+                "topic_distribution": {"policy": 1},
+            }
+        ],
+    )
+
+    assert prepared_case["entry_signals"] == [False, False, False]
+    assert prepared_case["exit_signals"] == [False, False, False]
+    assert prepared_case["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 0.28, 0.84])
+    assert prepared_case["external_signal_consumption_features"]["series"]["blended_weighted_signal_count"] == pytest.approx([0.0, 0.14, 0.42])
 
 
 def test_prepare_external_signal_manual_case_rejects_conflicting_non_manual_strategy() -> None:

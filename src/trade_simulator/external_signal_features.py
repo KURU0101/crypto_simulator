@@ -10,6 +10,13 @@ from trade_simulator.integrated_observer import scan_saved_signal_summaries
 
 
 DEFAULT_TIME_WEIGHT_PROFILE = (1.0,)
+BLENDED_SYMBOL_WEIGHT = 0.7
+BLENDED_TOPIC_WEIGHT = 0.3
+DEFAULT_CONSUMPTION_SERIES_NAME = "weighted_matching_signal_count"
+ALLOWED_CONSUMPTION_SERIES_NAMES = (
+    "weighted_matching_signal_count",
+    "blended_weighted_signal_count",
+)
 
 SIGNAL_TYPE_BASE_TIME_WEIGHT_PROFILES = {
     "news": (1.0, 0.7, 0.4, 0.2),
@@ -549,6 +556,43 @@ def _build_matching_consumption_series(series: dict, *, matching_run_count: list
     }
 
 
+def _build_blended_weighted_signal_count(series: dict) -> list[float]:
+    weighted_symbol_signal_count = list(series["weighted_symbol_signal_count"])
+    weighted_topic_signal_count = list(series["weighted_topic_signal_count"])
+    return [
+        symbol_count * BLENDED_SYMBOL_WEIGHT + topic_count * BLENDED_TOPIC_WEIGHT
+        for symbol_count, topic_count in zip(weighted_symbol_signal_count, weighted_topic_signal_count)
+    ]
+
+
+def _build_consumption_summary() -> dict:
+    return {
+        "matching_definition": {
+            "raw": "symbol_signal_count + topic_signal_count",
+            "weighted": "weighted_symbol_signal_count + weighted_topic_signal_count",
+        },
+        "blended_definition": {
+            "base_series": [
+                "weighted_symbol_signal_count",
+                "weighted_topic_signal_count",
+            ],
+            "weights": {
+                "symbol_weight": BLENDED_SYMBOL_WEIGHT,
+                "topic_weight": BLENDED_TOPIC_WEIGHT,
+            },
+        },
+    }
+
+
+def _resolve_consumption_series_name(consumption_series_name: object) -> str:
+    if consumption_series_name is None:
+        return DEFAULT_CONSUMPTION_SERIES_NAME
+    if consumption_series_name not in ALLOWED_CONSUMPTION_SERIES_NAMES:
+        allowed_values = ", ".join(ALLOWED_CONSUMPTION_SERIES_NAMES)
+        raise ValueError(f"consumption_series_name must be one of: {allowed_values}")
+    return str(consumption_series_name)
+
+
 def build_external_signal_consumption_features(feature_timeline: object) -> dict:
     if not isinstance(feature_timeline, dict):
         raise TypeError("feature_timeline must be a dict")
@@ -577,17 +621,13 @@ def build_external_signal_consumption_features(feature_timeline: object) -> dict
         matching_run_count=matching_run_count,
         weighted_matching_run_count=weighted_matching_run_count,
     )
+    consumption_series["blended_weighted_signal_count"] = _build_blended_weighted_signal_count(series)
     return {
         "return_timestamps": list(feature_timeline.get("return_timestamps", [])),
         "selected_symbol": feature_timeline.get("selected_symbol"),
         "selected_topics": list(feature_timeline.get("selected_topics", [])),
         "series": consumption_series,
-        "summary": {
-            "matching_definition": {
-                "raw": "symbol_signal_count + topic_signal_count",
-                "weighted": "weighted_symbol_signal_count + weighted_topic_signal_count",
-            }
-        },
+        "summary": _build_consumption_summary(),
     }
 
 
@@ -688,6 +728,7 @@ def build_external_feature_signals(
     *,
     entry_count_threshold: object = 1,
     exit_after_inactive_periods: object = 1,
+    consumption_series_name: object = DEFAULT_CONSUMPTION_SERIES_NAME,
 ) -> tuple[list[bool], list[bool]]:
     if isinstance(entry_count_threshold, bool) or not isinstance(entry_count_threshold, Real) or entry_count_threshold <= 0:
         raise ValueError("entry_count_threshold must be a positive number")
@@ -696,10 +737,11 @@ def build_external_feature_signals(
 
     resolved_consumption_features = _coerce_consumption_features(consumption_features)
     series = resolved_consumption_features.get("series")
+    resolved_series_name = _resolve_consumption_series_name(consumption_series_name)
 
-    matching_signal_count = series.get("weighted_matching_signal_count")
+    matching_signal_count = series.get(resolved_series_name)
     if not isinstance(matching_signal_count, list):
-        raise ValueError("consumption_features series must include weighted_matching_signal_count")
+        raise ValueError(f"consumption_features series must include {resolved_series_name}")
 
     entry_signals = [False] * len(matching_signal_count)
     exit_signals = [False] * len(matching_signal_count)
@@ -770,6 +812,7 @@ def prepare_external_signal_manual_case(
         consumption_features,
         entry_count_threshold=external_signal.get("entry_count_threshold", 1),
         exit_after_inactive_periods=external_signal.get("exit_after_inactive_periods", 1),
+        consumption_series_name=external_signal.get("consumption_series_name", DEFAULT_CONSUMPTION_SERIES_NAME),
     )
 
     prepared_case = dict(case)
