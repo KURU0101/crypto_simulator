@@ -473,24 +473,13 @@ def _aggregate_feature_contribution(series: dict[str, list[int] | list[float]], 
 
 
 def _finalize_feature_series(series: dict[str, list[int] | list[float]]) -> dict[str, list[int] | list[float] | list[bool]]:
-    symbol_signal_count = series["symbol_signal_count"]
-    topic_signal_count = series["topic_signal_count"]
-    weighted_symbol_signal_count = series["weighted_symbol_signal_count"]
-    weighted_topic_signal_count = series["weighted_topic_signal_count"]
-    matching_signal_count = [
-        symbol_count + topic_count
-        for symbol_count, topic_count in zip(symbol_signal_count, topic_signal_count)
-    ]
-    weighted_matching_signal_count = [
-        symbol_count + topic_count
-        for symbol_count, topic_count in zip(weighted_symbol_signal_count, weighted_topic_signal_count)
-    ]
     return {
-        **series,
-        "matching_signal_count": matching_signal_count,
-        "weighted_matching_signal_count": weighted_matching_signal_count,
-        "has_activity": [count > 0 for count in matching_signal_count],
-        "has_weighted_activity": [count > 0.0 for count in weighted_matching_signal_count],
+        "symbol_signal_count": list(series["symbol_signal_count"]),
+        "topic_signal_count": list(series["topic_signal_count"]),
+        "matching_run_count": list(series["matching_run_count"]),
+        "weighted_symbol_signal_count": list(series["weighted_symbol_signal_count"]),
+        "weighted_topic_signal_count": list(series["weighted_topic_signal_count"]),
+        "weighted_matching_run_count": list(series["weighted_matching_run_count"]),
     }
 
 
@@ -556,6 +545,18 @@ def build_external_signal_consumption_features(feature_timeline: object) -> dict
                 "weighted": "weighted_symbol_signal_count + weighted_topic_signal_count",
             }
         },
+    }
+
+
+def _build_deprecated_matching_series(series: dict) -> dict:
+    consumption_series = _build_matching_consumption_series(series)
+    return {
+        "matching_signal_count": consumption_series["matching_signal_count"],
+        "matching_run_count": consumption_series["matching_run_count"],
+        "weighted_matching_signal_count": consumption_series["weighted_matching_signal_count"],
+        "weighted_matching_run_count": consumption_series["weighted_matching_run_count"],
+        "has_activity": consumption_series["has_activity"],
+        "has_weighted_activity": consumption_series["has_weighted_activity"],
     }
 
 
@@ -647,6 +648,7 @@ def build_external_feature_timeline(
         "summary": {
             "aligned_summary_count": aligned_summary_count,
             "ignored_summary_count": ignored_summary_count,
+            "deprecated_matching_series": _build_deprecated_matching_series(finalized_series),
         },
     }
 

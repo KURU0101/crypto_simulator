@@ -61,18 +61,18 @@ def test_build_external_feature_timeline_aligns_raw_and_weighted_matching_summar
     assert feature_timeline["selected_topics"] == ["policy"]
     assert feature_timeline["series"]["symbol_signal_count"] == [2, 0, 0]
     assert feature_timeline["series"]["topic_signal_count"] == [1, 2, 0]
-    assert feature_timeline["series"]["matching_signal_count"] == [3, 2, 0]
-    assert feature_timeline["series"]["matching_run_count"] == [1, 1, 0]
+    assert "matching_signal_count" not in feature_timeline["series"]
+    assert "weighted_matching_signal_count" not in feature_timeline["series"]
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"] == [3, 2, 0]
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_run_count"] == [1, 1, 0]
     assert feature_timeline["series"]["weighted_symbol_signal_count"] == pytest.approx([2.0, 1.4, 0.8])
     assert feature_timeline["series"]["weighted_topic_signal_count"] == pytest.approx([1.0, 2.7, 1.8])
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([3.0, 4.1, 2.6])
-    assert feature_timeline["series"]["weighted_matching_run_count"] == pytest.approx([1.0, 1.7, 1.1])
-    assert feature_timeline["series"]["has_activity"] == [True, True, False]
-    assert feature_timeline["series"]["has_weighted_activity"] == [True, True, True]
-    assert feature_timeline["summary"] == {
-        "aligned_summary_count": 2,
-        "ignored_summary_count": 2,
-    }
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([3.0, 4.1, 2.6])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_run_count"] == pytest.approx([1.0, 1.7, 1.1])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["has_activity"] == [True, True, False]
+    assert feature_timeline["summary"]["deprecated_matching_series"]["has_weighted_activity"] == [True, True, True]
+    assert feature_timeline["summary"]["aligned_summary_count"] == 2
+    assert feature_timeline["summary"]["ignored_summary_count"] == 2
     assert feature_timeline["time_weight_profiles"]["default"] == list(DEFAULT_TIME_WEIGHT_PROFILE)
     assert feature_timeline["adjustments"]["default_scalar"] == DEFAULT_ADJUSTMENT_SCALAR
     assert feature_timeline["adjustments"]["applied_runs"][0]["base_profile"] == [1.0, 0.7, 0.4, 0.2]
@@ -113,8 +113,8 @@ def test_build_external_feature_timeline_supports_delayed_peak_source_profile() 
         symbol="BTC/USDT",
     )
 
-    assert feature_timeline["series"]["matching_signal_count"] == [1, 0, 0, 0, 0, 0]
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([0.1, 0.3, 0.8, 1.0, 0.8, 0.5])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"] == [1, 0, 0, 0, 0, 0]
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([0.1, 0.3, 0.8, 1.0, 0.8, 0.5])
 
 
 def test_build_external_signal_consumption_features_rebuilds_matching_series_from_symbol_and_topic() -> None:
@@ -145,9 +145,9 @@ def test_build_external_signal_consumption_features_rebuilds_matching_series_fro
 
     consumption_features = build_external_signal_consumption_features(feature_timeline)
 
-    assert consumption_features["series"]["matching_signal_count"] == feature_timeline["series"]["matching_signal_count"]
+    assert consumption_features["series"]["matching_signal_count"] == feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"]
     assert consumption_features["series"]["weighted_matching_signal_count"] == pytest.approx(
-        feature_timeline["series"]["weighted_matching_signal_count"]
+        feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"]
     )
     assert consumption_features["summary"]["matching_definition"] == {
         "raw": "symbol_signal_count + topic_signal_count",
@@ -175,9 +175,9 @@ def test_build_external_feature_timeline_sums_weighted_contributions_when_runs_o
         symbol="BTC/USDT",
     )
 
-    assert feature_timeline["series"]["matching_signal_count"] == [1, 2, 0, 0]
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 2.7, 1.8, 1.0])
-    assert feature_timeline["series"]["weighted_matching_run_count"] == pytest.approx([1.0, 1.7, 1.1, 0.6])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"] == [1, 2, 0, 0]
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 2.7, 1.8, 1.0])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_run_count"] == pytest.approx([1.0, 1.7, 1.1, 0.6])
 
 
 def test_build_external_feature_timeline_applies_run_adjustment_scalar_to_amplify_weighted_features() -> None:
@@ -204,8 +204,8 @@ def test_build_external_feature_timeline_applies_run_adjustment_scalar_to_amplif
         },
     )
 
-    assert feature_timeline["series"]["matching_signal_count"] == [1, 0, 0]
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.2, 0.84, 0.48])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"] == [1, 0, 0]
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.2, 0.84, 0.48])
     assert feature_timeline["adjustments"]["applied_runs"] == [
         {
             "run_id": "run-news-1",
@@ -278,7 +278,7 @@ def test_build_external_feature_timeline_applies_run_adjustment_scalar_to_suppre
         },
     )
 
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([0.06, 0.18, 0.48])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([0.06, 0.18, 0.48])
 
 
 def test_build_external_feature_timeline_applies_independent_scalars_per_run_before_summing() -> None:
@@ -316,7 +316,7 @@ def test_build_external_feature_timeline_applies_independent_scalars_per_run_bef
         },
     )
 
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.2, 1.64, 1.04, 0.56])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.2, 1.64, 1.04, 0.56])
 
 
 def test_build_external_feature_timeline_ignores_invalid_completed_summary_timestamp_boundary_case() -> None:
@@ -333,11 +333,9 @@ def test_build_external_feature_timeline_ignores_invalid_completed_summary_times
         symbol="BTC/USDT",
     )
 
-    assert feature_timeline["series"]["matching_signal_count"] == [0]
-    assert feature_timeline["summary"] == {
-        "aligned_summary_count": 0,
-        "ignored_summary_count": 1,
-    }
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"] == [0]
+    assert feature_timeline["summary"]["aligned_summary_count"] == 0
+    assert feature_timeline["summary"]["ignored_summary_count"] == 1
 
 
 def test_build_external_feature_timeline_uses_safe_default_for_unknown_or_invalid_profiles(monkeypatch) -> None:
@@ -364,9 +362,9 @@ def test_build_external_feature_timeline_uses_safe_default_for_unknown_or_invali
         symbol="BTC/USDT",
     )
 
-    assert feature_timeline["series"]["matching_signal_count"] == [1, 2]
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 2.0])
-    assert feature_timeline["series"]["weighted_matching_run_count"] == pytest.approx([1.0, 1.0])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"] == [1, 2]
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 2.0])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_run_count"] == pytest.approx([1.0, 1.0])
     assert feature_timeline["adjustments"]["applied_runs"][0]["profile_resolution"] == "default"
     assert feature_timeline["adjustments"]["applied_runs"][0]["scalar_resolution"] == "default"
 
@@ -414,7 +412,7 @@ def test_build_external_feature_timeline_accepts_profile_and_adjustment_override
 
     assert feature_timeline["time_weight_profiles"]["source"]["youtube_channel_rss"] == [0.2, 0.4, 0.6]
     assert feature_timeline["adjustments"]["source"]["youtube_channel_rss"]["base"] == 1.0
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([0.3, 0.6, 0.9])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([0.3, 0.6, 0.9])
     assert feature_timeline["adjustments"]["applied_runs"][0]["adjusted_profile"] == [0.30000000000000004, 0.6000000000000001, 0.8999999999999999]
 
 
@@ -455,7 +453,7 @@ def test_build_external_feature_timeline_merges_partial_overrides_without_losing
         "min": 0.6,
         "max": 1.6,
     }
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.7])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.7])
 
 
 def test_build_external_feature_timeline_ignores_invalid_override_settings_and_keeps_defaults() -> None:
@@ -500,7 +498,7 @@ def test_build_external_feature_timeline_ignores_invalid_override_settings_and_k
     )
 
     assert feature_timeline["time_weight_profiles"]["signal_type"]["news"] == [1.0]
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.0, 0.0])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.0, 0.0])
 
 
 def test_prepare_external_signal_manual_case_passes_feature_overrides_through_to_feature_layer() -> None:
@@ -539,7 +537,7 @@ def test_prepare_external_signal_manual_case_passes_feature_overrides_through_to
     )
 
     assert prepared_case["external_signal_features"]["time_weight_profiles"]["default"] == [0.3, 0.1]
-    assert prepared_case["external_signal_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.3, 0.1, 0.0])
+    assert prepared_case["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.3, 0.1, 0.0])
 
 
 def test_build_external_feature_timeline_keeps_stage_one_weighted_profile_when_adjustment_metrics_are_missing() -> None:
@@ -563,7 +561,7 @@ def test_build_external_feature_timeline_keeps_stage_one_weighted_profile_when_a
         symbol="BTC/USDT",
     )
 
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.7, 0.4])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.7, 0.4])
 
 
 def test_build_external_feature_timeline_clamps_adjustment_scalar_upper_bound() -> None:
@@ -589,7 +587,7 @@ def test_build_external_feature_timeline_clamps_adjustment_scalar_upper_bound() 
         },
     )
 
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([0.2, 0.6])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([0.2, 0.6])
 
 
 def test_build_external_feature_timeline_clamps_adjustment_scalar_lower_bound(monkeypatch) -> None:
@@ -626,7 +624,7 @@ def test_build_external_feature_timeline_clamps_adjustment_scalar_lower_bound(mo
         },
     )
 
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([0.4, 0.0])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([0.4, 0.0])
 
 
 def test_build_external_feature_timeline_falls_back_to_default_scalar_for_negative_metric() -> None:
@@ -653,7 +651,7 @@ def test_build_external_feature_timeline_falls_back_to_default_scalar_for_negati
         },
     )
 
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.7, 0.4])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.7, 0.4])
 
 
 def test_build_external_feature_timeline_falls_back_to_default_scalar_for_invalid_metric_format() -> None:
@@ -680,7 +678,7 @@ def test_build_external_feature_timeline_falls_back_to_default_scalar_for_invali
         },
     )
 
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.7, 0.4])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([1.0, 0.7, 0.4])
 
 
 def test_build_external_feature_timeline_handles_empty_return_timestamps_boundary_case() -> None:
@@ -699,12 +697,10 @@ def test_build_external_feature_timeline_handles_empty_return_timestamps_boundar
         symbol="BTC/USDT",
     )
 
-    assert feature_timeline["series"]["matching_signal_count"] == []
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == []
-    assert feature_timeline["summary"] == {
-        "aligned_summary_count": 0,
-        "ignored_summary_count": 1,
-    }
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"] == []
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == []
+    assert feature_timeline["summary"]["aligned_summary_count"] == 0
+    assert feature_timeline["summary"]["ignored_summary_count"] == 1
 
 
 def test_build_external_feature_timeline_never_applies_weight_before_first_available_period() -> None:
@@ -727,8 +723,8 @@ def test_build_external_feature_timeline_never_applies_weight_before_first_avail
         symbol="BTC/USDT",
     )
 
-    assert feature_timeline["series"]["matching_signal_count"] == [0, 1, 0]
-    assert feature_timeline["series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 1.0, 0.7])
+    assert feature_timeline["summary"]["deprecated_matching_series"]["matching_signal_count"] == [0, 1, 0]
+    assert feature_timeline["summary"]["deprecated_matching_series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 1.0, 0.7])
 
 
 def test_build_external_feature_signals_uses_weighted_activity_and_exits_after_quiet_periods() -> None:
@@ -821,12 +817,8 @@ def test_prepare_external_signal_manual_case_uses_weighted_feature_series_for_ma
     assert prepared_case["strategy"] == "manual"
     assert prepared_case["entry_signals"] == [False, False, True]
     assert prepared_case["exit_signals"] == [False, False, False]
-    assert prepared_case["external_signal_features"]["series"]["matching_signal_count"] == [0, 2, 0]
-    assert prepared_case["external_signal_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 0.28, 0.84])
     assert prepared_case["external_signal_consumption_features"]["series"]["matching_signal_count"] == [0, 2, 0]
-    assert prepared_case["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == pytest.approx(
-        [0.0, 0.28, 0.84]
-    )
+    assert prepared_case["external_signal_consumption_features"]["series"]["weighted_matching_signal_count"] == pytest.approx([0.0, 0.28, 0.84])
 
 
 def test_prepare_external_signal_manual_case_rejects_conflicting_non_manual_strategy() -> None:
