@@ -21,6 +21,7 @@ SOURCE_BASE_TIME_WEIGHT_PROFILES = {
 }
 
 DEFAULT_ADJUSTMENT_SCALAR = 1.0
+ADJUSTMENT_CONFIG_FIELDS = ("metric_name", "base", "alpha", "min", "max")
 
 SIGNAL_TYPE_ADJUSTMENT_CONFIGS = {
     "news": {
@@ -142,6 +143,46 @@ def _read_finite_number(value: object) -> float | None:
     return numeric_value
 
 
+def _copy_adjustment_config(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        field_name: value[field_name]
+        for field_name in ADJUSTMENT_CONFIG_FIELDS
+        if field_name in value
+    }
+
+
+def _merge_adjustment_config(base_config: object, override_config: object) -> dict:
+    merged = _copy_adjustment_config(base_config)
+    if not isinstance(override_config, dict):
+        return merged
+    for field_name in ADJUSTMENT_CONFIG_FIELDS:
+        if field_name in override_config:
+            merged[field_name] = override_config[field_name]
+    return merged
+
+
+def _read_adjustment_parameters(adjustment_config: object) -> tuple[str, float, float, float, float] | None:
+    if not isinstance(adjustment_config, dict):
+        return None
+
+    metric_name = adjustment_config.get("metric_name")
+    if not isinstance(metric_name, str) or not metric_name:
+        return None
+
+    base = _read_finite_number(adjustment_config.get("base"))
+    alpha = _read_finite_number(adjustment_config.get("alpha"))
+    min_adjustment = _read_finite_number(adjustment_config.get("min"))
+    max_adjustment = _read_finite_number(adjustment_config.get("max"))
+    if None in (base, alpha, min_adjustment, max_adjustment):
+        return None
+    if min_adjustment > max_adjustment:
+        return None
+
+    return metric_name, base, alpha, min_adjustment, max_adjustment
+
+
 def _build_feature_override_config(overrides: object = None) -> dict:
     config = {
         "time_weight_profiles": {
@@ -156,10 +197,10 @@ def _build_feature_override_config(overrides: object = None) -> dict:
         "adjustments": {
             "default_scalar": DEFAULT_ADJUSTMENT_SCALAR,
             "signal_type": {
-                key: dict(value) for key, value in SIGNAL_TYPE_ADJUSTMENT_CONFIGS.items()
+                key: _copy_adjustment_config(value) for key, value in SIGNAL_TYPE_ADJUSTMENT_CONFIGS.items()
             },
             "source": {
-                key: dict(value) for key, value in SOURCE_ADJUSTMENT_CONFIGS.items()
+                key: _copy_adjustment_config(value) for key, value in SOURCE_ADJUSTMENT_CONFIGS.items()
             },
         },
     }
@@ -192,11 +233,10 @@ def _build_feature_override_config(overrides: object = None) -> dict:
             for key, value in scoped_overrides.items():
                 if not isinstance(key, str) or not key or not isinstance(value, dict):
                     continue
-                merged_config = dict(config["adjustments"][scope_name].get(key, {}))
-                for field_name in ("metric_name", "base", "alpha", "min", "max"):
-                    if field_name in value:
-                        merged_config[field_name] = value[field_name]
-                config["adjustments"][scope_name][key] = merged_config
+                config["adjustments"][scope_name][key] = _merge_adjustment_config(
+                    config["adjustments"][scope_name].get(key, {}),
+                    value,
+                )
 
     return config
 
@@ -261,12 +301,10 @@ def _resolve_run_metric(summary: dict, run_metrics_by_run_id: dict[str, dict], a
     if not isinstance(run_metrics, dict):
         return None
 
-    if not isinstance(adjustment_config, dict):
+    parameters = _read_adjustment_parameters(adjustment_config)
+    if parameters is None:
         return None
-
-    metric_name = adjustment_config.get("metric_name")
-    if not isinstance(metric_name, str) or not metric_name:
-        return None
+    metric_name = parameters[0]
     return run_metrics.get(metric_name)
 
 
@@ -280,14 +318,10 @@ def _compute_run_adjustment_scalar(summary: dict, run_metrics_by_run_id: dict[st
     if normalized_metric is None or normalized_metric < 0:
         return float(resolved_config["adjustments"]["default_scalar"]), resolution
 
-    base = _read_finite_number(adjustment_config.get("base"))
-    alpha = _read_finite_number(adjustment_config.get("alpha"))
-    min_adjustment = _read_finite_number(adjustment_config.get("min"))
-    max_adjustment = _read_finite_number(adjustment_config.get("max"))
-    if None in (base, alpha, min_adjustment, max_adjustment):
+    parameters = _read_adjustment_parameters(adjustment_config)
+    if parameters is None:
         return float(resolved_config["adjustments"]["default_scalar"]), resolution
-    if min_adjustment > max_adjustment:
-        return float(resolved_config["adjustments"]["default_scalar"]), resolution
+    _, base, alpha, min_adjustment, max_adjustment = parameters
 
     scalar = base + alpha * normalized_metric
     return max(min_adjustment, min(max_adjustment, scalar)), resolution
@@ -305,6 +339,159 @@ def _apply_weighted_contribution(
         if target_index >= len(weighted_series):
             break
         weighted_series[target_index] += base_value * weight
+
+
+def _initialize_feature_series(length: int) -> dict[str, list[int] | list[float]]:
+    return {
+        "symbol_signal_count": [0] * length,
+        "topic_signal_count": [0] * length,
+        "matching_run_count": [0] * length,
+        "weighted_symbol_signal_count": [0.0] * length,
+        "weighted_topic_signal_count": [0.0] * length,
+        "weighted_matching_run_count": [0.0] * length,
+    }
+
+
+def _resolve_summary_feature_contribution(
+    summary: dict,
+    *,
+    summary_index: int,
+    parsed_return_timestamps: list[datetime],
+    return_timestamps: list[str],
+    normalized_symbol: str,
+    normalized_topics: list[str],
+    run_metrics_by_run_id: dict[str, dict],
+    resolved_config: dict,
+) -> dict | None:
+    if summary.get("status") != "completed":
+        return None
+
+    event_timestamp = summary.get("ended_at") or summary.get("started_at")
+    if event_timestamp is None:
+        return None
+
+    try:
+        event_time = _parse_iso_timestamp(event_timestamp, field_name=f"summaries[{summary_index}].ended_at")
+    except (TypeError, ValueError):
+        return None
+
+    period_index = bisect_left(parsed_return_timestamps, event_time)
+    if period_index >= len(parsed_return_timestamps):
+        return None
+
+    symbol_distribution = _normalize_distribution(summary.get("symbol_distribution"))
+    topic_distribution = _normalize_distribution(summary.get("topic_distribution"))
+    matched_symbol_count = symbol_distribution.get(normalized_symbol, 0)
+    matched_topic_count = sum(topic_distribution.get(topic, 0) for topic in normalized_topics)
+    if matched_symbol_count <= 0 and matched_topic_count <= 0:
+        return None
+
+    profile, profile_resolution = _resolve_base_time_weight_profile(summary, resolved_config)
+    adjustment_scalar, adjustment_resolution = _compute_run_adjustment_scalar(
+        summary,
+        run_metrics_by_run_id,
+        resolved_config,
+    )
+    adjusted_profile = tuple(weight * adjustment_scalar for weight in profile)
+    period_contributions = []
+    for offset, adjusted_weight in enumerate(adjusted_profile):
+        target_index = period_index + offset
+        if target_index >= len(parsed_return_timestamps):
+            break
+        period_contributions.append(
+            {
+                "period_index": target_index,
+                "timestamp": return_timestamps[target_index],
+                "weighted_symbol_signal_count": float(matched_symbol_count) * adjusted_weight,
+                "weighted_topic_signal_count": float(matched_topic_count) * adjusted_weight,
+                "weighted_matching_signal_count": float(matched_symbol_count + matched_topic_count) * adjusted_weight,
+                "weighted_matching_run_count": adjusted_weight,
+            }
+        )
+
+    return {
+        "period_index": period_index,
+        "matched_symbol_count": matched_symbol_count,
+        "matched_topic_count": matched_topic_count,
+        "adjusted_profile": adjusted_profile,
+        "applied_run": {
+            "run_id": summary.get("run_id"),
+            "source": summary.get("source"),
+            "signal_type": summary.get("signal_type"),
+            "base_profile": list(profile),
+            "scalar": adjustment_scalar,
+            "adjusted_profile": list(adjusted_profile),
+            "profile_resolution": profile_resolution,
+            "scalar_resolution": adjustment_resolution,
+            "contribution_start_index": period_index,
+            "contribution_start_timestamp": return_timestamps[period_index],
+            "raw_contribution": {
+                "symbol_signal_count": matched_symbol_count,
+                "topic_signal_count": matched_topic_count,
+                "matching_signal_count": matched_symbol_count + matched_topic_count,
+                "matching_run_count": 1,
+            },
+            "period_contributions": period_contributions,
+        },
+    }
+
+
+def _aggregate_feature_contribution(series: dict[str, list[int] | list[float]], contribution: dict) -> None:
+    period_index = contribution["period_index"]
+    matched_symbol_count = contribution["matched_symbol_count"]
+    matched_topic_count = contribution["matched_topic_count"]
+    adjusted_profile = contribution["adjusted_profile"]
+
+    symbol_signal_count = series["symbol_signal_count"]
+    topic_signal_count = series["topic_signal_count"]
+    matching_run_count = series["matching_run_count"]
+    weighted_symbol_signal_count = series["weighted_symbol_signal_count"]
+    weighted_topic_signal_count = series["weighted_topic_signal_count"]
+    weighted_matching_run_count = series["weighted_matching_run_count"]
+
+    symbol_signal_count[period_index] += matched_symbol_count
+    topic_signal_count[period_index] += matched_topic_count
+    matching_run_count[period_index] += 1
+    _apply_weighted_contribution(
+        weighted_symbol_signal_count,
+        start_index=period_index,
+        profile=adjusted_profile,
+        base_value=float(matched_symbol_count),
+    )
+    _apply_weighted_contribution(
+        weighted_topic_signal_count,
+        start_index=period_index,
+        profile=adjusted_profile,
+        base_value=float(matched_topic_count),
+    )
+    _apply_weighted_contribution(
+        weighted_matching_run_count,
+        start_index=period_index,
+        profile=adjusted_profile,
+        base_value=1.0,
+    )
+
+
+def _finalize_feature_series(series: dict[str, list[int] | list[float]]) -> dict[str, list[int] | list[float] | list[bool]]:
+    symbol_signal_count = series["symbol_signal_count"]
+    topic_signal_count = series["topic_signal_count"]
+    weighted_symbol_signal_count = series["weighted_symbol_signal_count"]
+    weighted_topic_signal_count = series["weighted_topic_signal_count"]
+    matching_signal_count = [
+        symbol_count + topic_count
+        for symbol_count, topic_count in zip(symbol_signal_count, topic_signal_count)
+    ]
+    weighted_matching_signal_count = [
+        symbol_count + topic_count
+        for symbol_count, topic_count in zip(weighted_symbol_signal_count, weighted_topic_signal_count)
+    ]
+    return {
+        **series,
+        "matching_signal_count": matching_signal_count,
+        "weighted_matching_signal_count": weighted_matching_signal_count,
+        "has_activity": [count > 0 for count in matching_signal_count],
+        "has_weighted_activity": [count > 0.0 for count in weighted_matching_signal_count],
+    }
 
 
 def build_external_feature_timeline(
@@ -338,13 +525,7 @@ def build_external_feature_timeline(
     ]
     normalized_symbol = _normalize_feature_symbol(symbol)
     normalized_topics = _normalize_topics(topics)
-
-    symbol_signal_count = [0] * len(parsed_return_timestamps)
-    topic_signal_count = [0] * len(parsed_return_timestamps)
-    matching_run_count = [0] * len(parsed_return_timestamps)
-    weighted_symbol_signal_count = [0.0] * len(parsed_return_timestamps)
-    weighted_topic_signal_count = [0.0] * len(parsed_return_timestamps)
-    weighted_matching_run_count = [0.0] * len(parsed_return_timestamps)
+    series = _initialize_feature_series(len(parsed_return_timestamps))
     aligned_summary_count = 0
     ignored_summary_count = 0
     applied_adjustments = []
@@ -352,111 +533,24 @@ def build_external_feature_timeline(
     for index, summary in enumerate(summaries):
         if not isinstance(summary, dict):
             raise TypeError(f"summaries[{index}] must be a dict")
-        if summary.get("status") != "completed":
-            ignored_summary_count += 1
-            continue
-
-        event_timestamp = summary.get("ended_at") or summary.get("started_at")
-        if event_timestamp is None:
-            ignored_summary_count += 1
-            continue
-
-        try:
-            event_time = _parse_iso_timestamp(event_timestamp, field_name=f"summaries[{index}].ended_at")
-        except (TypeError, ValueError):
-            ignored_summary_count += 1
-            continue
-
-        period_index = bisect_left(parsed_return_timestamps, event_time)
-        if period_index >= len(parsed_return_timestamps):
-            ignored_summary_count += 1
-            continue
-
-        symbol_distribution = _normalize_distribution(summary.get("symbol_distribution"))
-        topic_distribution = _normalize_distribution(summary.get("topic_distribution"))
-        matched_symbol_count = symbol_distribution.get(normalized_symbol, 0)
-        matched_topic_count = sum(topic_distribution.get(topic, 0) for topic in normalized_topics)
-
-        if matched_symbol_count <= 0 and matched_topic_count <= 0:
-            ignored_summary_count += 1
-            continue
-
-        profile, profile_resolution = _resolve_base_time_weight_profile(summary, resolved_config)
-        adjustment_scalar, adjustment_resolution = _compute_run_adjustment_scalar(
+        contribution = _resolve_summary_feature_contribution(
             summary,
-            resolved_run_metrics_by_run_id,
-            resolved_config,
+            summary_index=index,
+            parsed_return_timestamps=parsed_return_timestamps,
+            return_timestamps=return_timestamps,
+            normalized_symbol=normalized_symbol,
+            normalized_topics=normalized_topics,
+            run_metrics_by_run_id=resolved_run_metrics_by_run_id,
+            resolved_config=resolved_config,
         )
-        adjusted_profile = tuple(weight * adjustment_scalar for weight in profile)
-        period_contributions = []
-        for offset, adjusted_weight in enumerate(adjusted_profile):
-            target_index = period_index + offset
-            if target_index >= len(parsed_return_timestamps):
-                break
-            period_contributions.append(
-                {
-                    "period_index": target_index,
-                    "timestamp": return_timestamps[target_index],
-                    "weighted_symbol_signal_count": float(matched_symbol_count) * adjusted_weight,
-                    "weighted_topic_signal_count": float(matched_topic_count) * adjusted_weight,
-                    "weighted_matching_signal_count": float(matched_symbol_count + matched_topic_count) * adjusted_weight,
-                    "weighted_matching_run_count": adjusted_weight,
-                }
-            )
-        symbol_signal_count[period_index] += matched_symbol_count
-        topic_signal_count[period_index] += matched_topic_count
-        matching_run_count[period_index] += 1
-        _apply_weighted_contribution(
-            weighted_symbol_signal_count,
-            start_index=period_index,
-            profile=adjusted_profile,
-            base_value=float(matched_symbol_count),
-        )
-        _apply_weighted_contribution(
-            weighted_topic_signal_count,
-            start_index=period_index,
-            profile=adjusted_profile,
-            base_value=float(matched_topic_count),
-        )
-        _apply_weighted_contribution(
-            weighted_matching_run_count,
-            start_index=period_index,
-            profile=adjusted_profile,
-            base_value=1.0,
-        )
-        applied_adjustments.append(
-            {
-                "run_id": summary.get("run_id"),
-                "source": summary.get("source"),
-                "signal_type": summary.get("signal_type"),
-                "base_profile": list(profile),
-                "scalar": adjustment_scalar,
-                "adjusted_profile": list(adjusted_profile),
-                "profile_resolution": profile_resolution,
-                "scalar_resolution": adjustment_resolution,
-                "contribution_start_index": period_index,
-                "contribution_start_timestamp": return_timestamps[period_index],
-                "raw_contribution": {
-                    "symbol_signal_count": matched_symbol_count,
-                    "topic_signal_count": matched_topic_count,
-                    "matching_signal_count": matched_symbol_count + matched_topic_count,
-                    "matching_run_count": 1,
-                },
-                "period_contributions": period_contributions,
-            }
-        )
-        aligned_summary_count += 1
+        if contribution is None:
+            ignored_summary_count += 1
+            continue
 
-    matching_signal_count = [
-        symbol_count + topic_count
-        for symbol_count, topic_count in zip(symbol_signal_count, topic_signal_count)
-    ]
-    weighted_matching_signal_count = [
-        symbol_count + topic_count
-        for symbol_count, topic_count in zip(weighted_symbol_signal_count, weighted_topic_signal_count)
-    ]
-    has_activity = [count > 0 for count in matching_signal_count]
-    has_weighted_activity = [count > 0.0 for count in weighted_matching_signal_count]
+        _aggregate_feature_contribution(series, contribution)
+        applied_adjustments.append(contribution["applied_run"])
+        aligned_summary_count += 1
+    finalized_series = _finalize_feature_series(series)
 
     return {
         "return_timestamps": list(return_timestamps),
@@ -467,18 +561,7 @@ def build_external_feature_timeline(
             **_serialize_feature_override_config(resolved_config)["adjustments"],
             "applied_runs": applied_adjustments,
         },
-        "series": {
-            "symbol_signal_count": symbol_signal_count,
-            "topic_signal_count": topic_signal_count,
-            "matching_signal_count": matching_signal_count,
-            "matching_run_count": matching_run_count,
-            "weighted_symbol_signal_count": weighted_symbol_signal_count,
-            "weighted_topic_signal_count": weighted_topic_signal_count,
-            "weighted_matching_signal_count": weighted_matching_signal_count,
-            "weighted_matching_run_count": weighted_matching_run_count,
-            "has_activity": has_activity,
-            "has_weighted_activity": has_weighted_activity,
-        },
+        "series": finalized_series,
         "summary": {
             "aligned_summary_count": aligned_summary_count,
             "ignored_summary_count": ignored_summary_count,

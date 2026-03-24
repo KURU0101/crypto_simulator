@@ -12,6 +12,17 @@ from trade_simulator.external_signal_features import (
 )
 
 
+def build_completed_summary(**overrides: object) -> dict:
+    summary = {
+        "status": "completed",
+        "ended_at": "2024-01-01T00:30:00Z",
+        "symbol_distribution": {"BTCUSDT": 1},
+        "topic_distribution": {},
+    }
+    summary.update(overrides)
+    return summary
+
+
 def test_build_external_feature_timeline_aligns_raw_and_weighted_matching_summaries_to_return_timestamps() -> None:
     feature_timeline = build_external_feature_timeline(
         [
@@ -20,34 +31,26 @@ def test_build_external_feature_timeline_aligns_raw_and_weighted_matching_summar
             "2024-01-01T03:00:00Z",
         ],
         [
-            {
-                "status": "completed",
-                "ended_at": "2024-01-01T00:30:00Z",
-                "signal_type": "news",
-                "source": "coindesk_rss",
-                "symbol_distribution": {"BTCUSDT": 2},
-                "topic_distribution": {"policy": 1},
-            },
-            {
-                "status": "completed",
-                "ended_at": "2024-01-01T01:15:00Z",
-                "signal_type": "news",
-                "source": "sec_press_releases_rss",
-                "symbol_distribution": {"ETHUSDT": 3},
-                "topic_distribution": {"policy": 2},
-            },
+            build_completed_summary(
+                signal_type="news",
+                source="coindesk_rss",
+                symbol_distribution={"BTCUSDT": 2},
+                topic_distribution={"policy": 1},
+            ),
+            build_completed_summary(
+                ended_at="2024-01-01T01:15:00Z",
+                signal_type="news",
+                source="sec_press_releases_rss",
+                symbol_distribution={"ETHUSDT": 3},
+                topic_distribution={"policy": 2},
+            ),
             {
                 "status": "failed",
                 "ended_at": "2024-01-01T01:30:00Z",
                 "symbol_distribution": {"BTCUSDT": 5},
                 "topic_distribution": {"policy": 5},
             },
-            {
-                "status": "completed",
-                "ended_at": "2024-01-01T04:00:00Z",
-                "symbol_distribution": {"BTCUSDT": 1},
-                "topic_distribution": {},
-            },
+            build_completed_summary(ended_at="2024-01-01T04:00:00Z"),
         ],
         symbol="BTC/USDT",
         topics=["policy"],
@@ -104,14 +107,7 @@ def test_build_external_feature_timeline_supports_delayed_peak_source_profile() 
             "2024-01-01T06:00:00Z",
         ],
         [
-            {
-                "status": "completed",
-                "ended_at": "2024-01-01T00:30:00Z",
-                "signal_type": "sns",
-                "source": "youtube_channel_rss",
-                "symbol_distribution": {"BTCUSDT": 1},
-                "topic_distribution": {},
-            }
+            build_completed_summary(signal_type="sns", source="youtube_channel_rss")
         ],
         symbol="BTC/USDT",
     )
@@ -129,22 +125,13 @@ def test_build_external_feature_timeline_sums_weighted_contributions_when_runs_o
             "2024-01-01T04:00:00Z",
         ],
         [
-            {
-                "status": "completed",
-                "ended_at": "2024-01-01T00:30:00Z",
-                "signal_type": "news",
-                "source": "coindesk_rss",
-                "symbol_distribution": {"BTCUSDT": 1},
-                "topic_distribution": {},
-            },
-            {
-                "status": "completed",
-                "ended_at": "2024-01-01T01:30:00Z",
-                "signal_type": "news",
-                "source": "coindesk_rss",
-                "symbol_distribution": {"BTCUSDT": 2},
-                "topic_distribution": {},
-            },
+            build_completed_summary(signal_type="news", source="coindesk_rss"),
+            build_completed_summary(
+                ended_at="2024-01-01T01:30:00Z",
+                signal_type="news",
+                source="coindesk_rss",
+                symbol_distribution={"BTCUSDT": 2},
+            ),
         ],
         symbol="BTC/USDT",
     )
