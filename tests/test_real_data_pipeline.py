@@ -551,9 +551,18 @@ def test_load_real_data_comparison_config_reads_external_signal_series_compariso
 
     assert data_source["data_source"]["symbol"] == "BTC/USDT"
     assert [case["name"] for case in cases] == [
-        "external_signal_matching_default",
-        "external_signal_blended_default",
-        "external_signal_blended_equal",
+        "matching_low",
+        "matching_baseline",
+        "matching_high",
+        "blended_s07_t03_low",
+        "blended_s07_t03_baseline",
+        "blended_s07_t03_high",
+        "blended_s05_t05_low",
+        "blended_s05_t05_baseline",
+        "blended_s05_t05_high",
+        "blended_s03_t07_low",
+        "blended_s03_t07_baseline",
+        "blended_s03_t07_high",
     ]
 
 

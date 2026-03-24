@@ -1,9 +1,9 @@
 {
-  "run_id": "run_20240101_033000",
+  "run_id": "run_20240101_013000",
   "signal_type": "news",
   "source": "manual_compare_sample",
-  "started_at": "2024-01-01T03:25:00Z",
-  "ended_at": "2024-01-01T03:30:00Z",
+  "started_at": "2024-01-01T01:25:00Z",
+  "ended_at": "2024-01-01T01:30:00Z",
   "status": "completed",
   "fetched_item_count": 1,
   "normalized_success_count": 1,

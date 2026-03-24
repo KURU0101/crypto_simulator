@@ -241,6 +241,7 @@ def test_run_comparisons_includes_external_signal_metadata_for_manual_cases() ->
                 "exit_signals": [False, False, True],
                 "external_signal": {
                     "consumption_series_name": "blended_weighted_signal_count",
+                    "entry_count_threshold": 1,
                     "blended_weights": {
                         "symbol": 0.5,
                         "topic": 0.5,
@@ -271,6 +272,7 @@ def test_run_comparisons_includes_external_signal_metadata_for_manual_cases() ->
 
     assert comparisons[0]["external_signal"] == {
         "consumption_series_name": "blended_weighted_signal_count",
+        "entry_count_threshold": 1,
         "blended_weights": {
             "symbol": 0.5,
             "topic": 0.5,

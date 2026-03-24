@@ -134,6 +134,7 @@ def _build_external_signal_comparison_metadata(case: dict) -> dict:
     metadata: dict[str, object] = {
         "external_signal": {
             "consumption_series_name": external_signal.get("consumption_series_name", "weighted_matching_signal_count"),
+            "entry_count_threshold": external_signal.get("entry_count_threshold", 1),
         }
     }
 
