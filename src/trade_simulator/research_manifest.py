@@ -12,6 +12,35 @@ from pathlib import Path
 
 INPUT_SCHEMA_VERSION = "research_manifest_input_v1"
 ENGINE_VERSION = "research_manifest_dry_run_v1"
+CACHE_KEY_VERSION = "acquisition_cache_v1"
+
+RESULT_STATUS_PENDING = "pending"
+RESULT_STATUS_RUNNING = "running"
+RESULT_STATUS_COMPLETED = "completed"
+RESULT_STATUS_FAILED = "failed"
+ALLOWED_RESULT_STATUSES = (
+    RESULT_STATUS_PENDING,
+    RESULT_STATUS_RUNNING,
+    RESULT_STATUS_COMPLETED,
+    RESULT_STATUS_FAILED,
+)
+
+ERROR_CODE_VALIDATION = "validation_error"
+ERROR_CODE_RUNTIME = "runtime_error"
+ERROR_CODE_INTERNAL = "internal_error"
+ALLOWED_ERROR_CODES = (
+    "",
+    ERROR_CODE_VALIDATION,
+    ERROR_CODE_RUNTIME,
+    ERROR_CODE_INTERNAL,
+)
+
+SOURCE_FAMILY_NEWS = "news"
+SOURCE_FAMILY_SNS = "sns"
+ALLOWED_SOURCE_FAMILIES = (
+    SOURCE_FAMILY_NEWS,
+    SOURCE_FAMILY_SNS,
+)
 
 PERIOD_REQUIRED_COLUMNS = (
     "period_id",
@@ -95,6 +124,21 @@ RESULTS_INDEX_COLUMNS = (
     "updated_at",
 )
 
+ACQUISITION_MANIFEST_COLUMNS = (
+    "run_id",
+    "acquisition_id",
+    "source_family",
+    "symbol",
+    "period_id",
+    "period_signature",
+    "window_start",
+    "window_end",
+    "status",
+    "cache_key",
+    "created_at",
+    "updated_at",
+)
+
 
 @dataclass(frozen=True)
 class ResearchManifestRun:
@@ -104,11 +148,13 @@ class ResearchManifestRun:
     grids_copy_path: Path
     manifest_path: Path
     results_index_path: Path
+    acquisition_manifest_path: Path
     metadata_path: Path
     period_row_count: int
     grid_row_count: int
     eligible_grid_row_count: int
     manifest_case_count: int
+    acquisition_manifest_count: int
 
 
 def _utc_now() -> datetime:
@@ -215,6 +261,25 @@ def _hash_canonical_payload(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def validate_result_status(status: str) -> str:
+    if status not in ALLOWED_RESULT_STATUSES:
+        raise ValueError(f"status must be one of: {', '.join(ALLOWED_RESULT_STATUSES)}")
+    return status
+
+
+def validate_error_code(*, status: str, error_code: str, error_message: str) -> str:
+    if error_code not in ALLOWED_ERROR_CODES:
+        raise ValueError(f"error_code must be one of: {', '.join(code or '<empty>' for code in ALLOWED_ERROR_CODES)}")
+    if status == RESULT_STATUS_FAILED:
+        if not error_code:
+            raise ValueError("error_code is required when status is failed")
+        if not error_message.strip():
+            raise ValueError("error_message is required when status is failed")
+    elif error_code or error_message.strip():
+        raise ValueError("error_code and error_message must be empty unless status is failed")
+    return error_code
+
+
 def _canonical_payload(row: dict[str, object], columns: tuple[str, ...]) -> dict[str, object]:
     # Signatures intentionally operate on a fixed column order with normalized scalar values.
     # Dates are stored as ISO strings, numbers as canonical decimal strings, and missing optional
@@ -295,6 +360,27 @@ def load_grid_rows(csv_path: str | Path) -> list[dict[str, object]]:
     return normalized_rows
 
 
+def normalize_source_families(source_families: list[str] | tuple[str, ...]) -> list[str]:
+    normalized_source_families: list[str] = []
+    seen_source_families: set[str] = set()
+
+    for raw_value in source_families:
+        normalized_value = _strip_and_validate_null_string(str(raw_value), field_name="source_family").lower()
+        if not normalized_value:
+            raise ValueError("source_family must be a non-empty string")
+        if normalized_value not in ALLOWED_SOURCE_FAMILIES:
+            raise ValueError(f"source_family must be one of: {', '.join(ALLOWED_SOURCE_FAMILIES)}")
+        if normalized_value in seen_source_families:
+            continue
+        seen_source_families.add(normalized_value)
+        normalized_source_families.append(normalized_value)
+
+    if not normalized_source_families:
+        raise ValueError("at least one source_family must be provided")
+
+    return normalized_source_families
+
+
 def select_eligible_signal_only_grids(grid_rows: list[dict[str, object]]) -> list[dict[str, object]]:
     return [
         row for row in grid_rows if row["enabled"] is True and row["grid_family"] == "signal_only"
@@ -353,19 +439,91 @@ def build_results_index_rows(
     *,
     created_at: str,
 ) -> list[dict[str, object]]:
-    return [
+    rows: list[dict[str, object]] = []
+    for row in manifest_rows:
+        status = validate_result_status(RESULT_STATUS_PENDING)
+        error_code = validate_error_code(status=status, error_code="", error_message="")
+        rows.append(
+            {
+                "run_id": row["run_id"],
+                "case_id": row["case_id"],
+                "case_signature": row["case_signature"],
+                "status": status,
+                "error_code": error_code,
+                "error_message": "",
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+        )
+    return rows
+
+
+def build_acquisition_cache_key(
+    *,
+    source_family: str,
+    symbol: str,
+    period_signature: str,
+    input_schema_version: str,
+    cache_key_version: str = CACHE_KEY_VERSION,
+) -> str:
+    if not source_family:
+        raise ValueError("source_family is required to build cache_key")
+    if not symbol:
+        raise ValueError("symbol is required to build cache_key")
+    if not period_signature:
+        raise ValueError("period_signature is required to build cache_key")
+    if not input_schema_version:
+        raise ValueError("input_schema_version is required to build cache_key")
+
+    return _hash_canonical_payload(
         {
-            "run_id": row["run_id"],
-            "case_id": row["case_id"],
-            "case_signature": row["case_signature"],
-            "status": "pending",
-            "error_code": "",
-            "error_message": "",
-            "created_at": created_at,
-            "updated_at": created_at,
+            "cache_key_version": cache_key_version,
+            "source_family": source_family,
+            "symbol": symbol,
+            "period_signature": period_signature,
+            "input_schema_version": input_schema_version,
         }
-        for row in manifest_rows
-    ]
+    )
+
+
+def build_acquisition_manifest_rows(
+    period_rows: list[dict[str, object]],
+    *,
+    run_id: str,
+    source_families: list[str] | tuple[str, ...],
+    created_at: str,
+    input_schema_version: str = INPUT_SCHEMA_VERSION,
+) -> list[dict[str, object]]:
+    normalized_source_families = normalize_source_families(source_families)
+    acquisition_rows: list[dict[str, object]] = []
+
+    for source_family in normalized_source_families:
+        for period_row in period_rows:
+            status = validate_result_status(RESULT_STATUS_PENDING)
+            cache_key = build_acquisition_cache_key(
+                source_family=source_family,
+                symbol=str(period_row["symbol"]),
+                period_signature=str(period_row["period_signature"]),
+                input_schema_version=input_schema_version,
+            )
+            acquisition_rows.append(
+                {
+                    "run_id": run_id,
+                    "acquisition_id": f'{source_family}__{period_row["symbol"]}__{period_row["period_id"]}',
+                    "source_family": source_family,
+                    "symbol": period_row["symbol"],
+                    "period_id": period_row["period_id"],
+                    "period_signature": period_row["period_signature"],
+                    "window_start": period_row["window_start"],
+                    "window_end": period_row["window_end"],
+                    "status": status,
+                    "cache_key": cache_key,
+                    "created_at": created_at,
+                    "updated_at": created_at,
+                }
+            )
+
+    return acquisition_rows
 
 
 def _write_csv(path: Path, fieldnames: tuple[str, ...], rows: list[dict[str, object]]) -> None:
@@ -380,6 +538,7 @@ def generate_research_manifest_run(
     periods_csv_path: str | Path,
     grids_csv_path: str | Path,
     *,
+    source_families: list[str] | tuple[str, ...],
     run_root_dir: str | Path = "var/research_runs",
     run_id: str | None = None,
     created_at: datetime | None = None,
@@ -393,6 +552,12 @@ def generate_research_manifest_run(
     eligible_grid_rows = select_eligible_signal_only_grids(grid_rows)
     manifest_rows = build_manifest_rows(period_rows, eligible_grid_rows, run_id=resolved_run_id)
     results_index_rows = build_results_index_rows(manifest_rows, created_at=created_at_text)
+    acquisition_manifest_rows = build_acquisition_manifest_rows(
+        period_rows,
+        run_id=resolved_run_id,
+        source_families=source_families,
+        created_at=created_at_text,
+    )
 
     run_dir = Path(run_root_dir) / resolved_run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -401,24 +566,28 @@ def generate_research_manifest_run(
     grids_copy_path = run_dir / "grids.csv"
     manifest_path = run_dir / "manifest.csv"
     results_index_path = run_dir / "results_index.csv"
+    acquisition_manifest_path = run_dir / "acquisition_manifest.csv"
     metadata_path = run_dir / "metadata.json"
 
     shutil.copyfile(Path(periods_csv_path), periods_copy_path)
     shutil.copyfile(Path(grids_csv_path), grids_copy_path)
     _write_csv(manifest_path, MANIFEST_COLUMNS, manifest_rows)
     _write_csv(results_index_path, RESULTS_INDEX_COLUMNS, results_index_rows)
+    _write_csv(acquisition_manifest_path, ACQUISITION_MANIFEST_COLUMNS, acquisition_manifest_rows)
 
     metadata = {
         "run_id": resolved_run_id,
         "created_at": created_at_text,
         "input_schema_version": INPUT_SCHEMA_VERSION,
         "engine_version": ENGINE_VERSION,
+        "source_families": normalize_source_families(source_families),
         "periods_file_name": periods_copy_path.name,
         "grids_file_name": grids_copy_path.name,
         "period_row_count": len(period_rows),
         "grid_row_count": len(grid_rows),
         "eligible_grid_row_count": len(eligible_grid_rows),
         "manifest_case_count": len(manifest_rows),
+        "acquisition_manifest_count": len(acquisition_manifest_rows),
     }
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -429,9 +598,11 @@ def generate_research_manifest_run(
         grids_copy_path=grids_copy_path,
         manifest_path=manifest_path,
         results_index_path=results_index_path,
+        acquisition_manifest_path=acquisition_manifest_path,
         metadata_path=metadata_path,
         period_row_count=len(period_rows),
         grid_row_count=len(grid_rows),
         eligible_grid_row_count=len(eligible_grid_rows),
         manifest_case_count=len(manifest_rows),
+        acquisition_manifest_count=len(acquisition_manifest_rows),
     )

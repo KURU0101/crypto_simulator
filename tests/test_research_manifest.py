@@ -7,13 +7,19 @@ from pathlib import Path
 import pytest
 
 from trade_simulator.research_manifest import (
+    ALLOWED_RESULT_STATUSES,
     ENGINE_VERSION,
     INPUT_SCHEMA_VERSION,
+    RESULT_STATUS_PENDING,
+    build_acquisition_cache_key,
+    build_acquisition_manifest_rows,
     build_manifest_rows,
     generate_research_manifest_run,
     load_grid_rows,
     load_period_rows,
     select_eligible_signal_only_grids,
+    validate_error_code,
+    validate_result_status,
 )
 from trade_simulator.research_manifest_cli import format_research_manifest_run, main as research_manifest_main
 
@@ -140,6 +146,7 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
     result = generate_research_manifest_run(
         periods_path,
         grids_path,
+        source_families=["news", "sns"],
         run_root_dir=run_root_dir,
         run_id="20260324T010203Z_deadbeef",
     )
@@ -150,6 +157,7 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
 
     manifest_rows = list(csv.DictReader(result.manifest_path.open("r", encoding="utf-8", newline="")))
     results_rows = list(csv.DictReader(result.results_index_path.open("r", encoding="utf-8", newline="")))
+    acquisition_rows = list(csv.DictReader(result.acquisition_manifest_path.open("r", encoding="utf-8", newline="")))
     metadata = json.loads(result.metadata_path.read_text(encoding="utf-8"))
 
     assert len(manifest_rows) == 2
@@ -161,19 +169,24 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
     assert {row["consumption_series_name"] for row in manifest_rows} == {"weighted_matching_signal_count"}
 
     assert len(results_rows) == 2
-    assert {row["status"] for row in results_rows} == {"pending"}
+    assert {row["status"] for row in results_rows} == {RESULT_STATUS_PENDING}
+    assert len(acquisition_rows) == 4
+    assert {row["status"] for row in acquisition_rows} == {RESULT_STATUS_PENDING}
+    assert {row["source_family"] for row in acquisition_rows} == {"news", "sns"}
 
     assert metadata == {
         "run_id": "20260324T010203Z_deadbeef",
         "created_at": metadata["created_at"],
         "input_schema_version": INPUT_SCHEMA_VERSION,
         "engine_version": ENGINE_VERSION,
+        "source_families": ["news", "sns"],
         "periods_file_name": "periods.csv",
         "grids_file_name": "grids.csv",
         "period_row_count": 2,
         "grid_row_count": 3,
         "eligible_grid_row_count": 1,
         "manifest_case_count": 2,
+        "acquisition_manifest_count": 4,
     }
 
 
@@ -435,6 +448,10 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
             str(periods_path),
             "--grids-csv",
             str(grids_path),
+            "--source-family",
+            "news",
+            "--source-family",
+            "sns",
             "--run-root-dir",
             str(run_root_dir),
             "--run-id",
@@ -448,6 +465,7 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
     rendered = json.loads(captured.out)
     assert rendered["run_id"] == "20260324T010203Z_deadbeef"
     assert rendered["manifest_case_count"] == 2
+    assert rendered["acquisition_manifest_count"] == 4
     assert rendered["run_dir"] == str(run_root_dir / "20260324T010203Z_deadbeef")
 
 
@@ -456,3 +474,113 @@ def test_format_research_manifest_run_returns_json() -> None:
 
     assert '"run_id": "run_x"' in rendered
     assert '"manifest_case_count": 3' in rendered
+
+
+def test_acquisition_manifest_is_generated_with_stable_units(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    _write_valid_periods_csv(periods_path)
+
+    period_rows = load_period_rows(periods_path)
+    acquisition_rows = build_acquisition_manifest_rows(
+        period_rows,
+        run_id="run_fixed",
+        source_families=["news"],
+        created_at="2026-03-24T00:00:00Z",
+    )
+
+    assert [row["acquisition_id"] for row in acquisition_rows] == [
+        "news__BTCUSD__p_alpha",
+        "news__ETHUSD__p_minimal",
+    ]
+    assert all(row["status"] == RESULT_STATUS_PENDING for row in acquisition_rows)
+
+
+def test_engine_version_constant_is_stable() -> None:
+    assert ENGINE_VERSION == "research_manifest_dry_run_v1"
+
+
+def test_validate_result_status_rejects_invalid_value() -> None:
+    with pytest.raises(ValueError, match="status must be one of"):
+        validate_result_status("queued")
+
+
+def test_validate_error_code_requires_value_for_failed_status() -> None:
+    with pytest.raises(ValueError, match="error_code is required when status is failed"):
+        validate_error_code(status="failed", error_code="", error_message="boom")
+
+
+def test_validate_error_code_rejects_non_empty_value_for_pending_status() -> None:
+    with pytest.raises(ValueError, match="error_code and error_message must be empty unless status is failed"):
+        validate_error_code(status="pending", error_code="runtime_error", error_message="boom")
+
+
+def test_build_acquisition_manifest_rows_rejects_invalid_source_family(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    _write_valid_periods_csv(periods_path)
+
+    with pytest.raises(ValueError, match="source_family must be one of"):
+        build_acquisition_manifest_rows(
+            load_period_rows(periods_path),
+            run_id="run_fixed",
+            source_families=["podcast"],
+            created_at="2026-03-24T00:00:00Z",
+        )
+
+
+def test_build_acquisition_cache_key_requires_all_inputs() -> None:
+    with pytest.raises(ValueError, match="period_signature is required to build cache_key"):
+        build_acquisition_cache_key(
+            source_family="news",
+            symbol="BTCUSD",
+            period_signature="",
+            input_schema_version=INPUT_SCHEMA_VERSION,
+        )
+
+
+def test_acquisition_ids_do_not_collide_for_same_symbol_across_periods(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    _write_csv(
+        periods_path,
+        [
+            "period_id",
+            "event_date",
+            "window_start",
+            "window_end",
+            "short_name",
+            "event_type",
+            "symbol",
+            "note",
+            "overlap_group",
+        ],
+        [
+            ["p_one", "2024-01-10", "2024-01-09", "2024-01-11", "A", "etf", "BTCUSD", "x", "g1"],
+            ["p_two", "2024-01-12", "2024-01-11", "2024-01-13", "B", "etf", "BTCUSD", "y", "g2"],
+        ],
+    )
+
+    acquisition_rows = build_acquisition_manifest_rows(
+        load_period_rows(periods_path),
+        run_id="run_fixed",
+        source_families=["news"],
+        created_at="2026-03-24T00:00:00Z",
+    )
+
+    assert len({row["acquisition_id"] for row in acquisition_rows}) == 2
+
+
+def test_cache_keys_do_not_collide_for_multiple_source_families_on_same_period(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    _write_valid_periods_csv(periods_path)
+
+    acquisition_rows = build_acquisition_manifest_rows(
+        load_period_rows(periods_path)[:1],
+        run_id="run_fixed",
+        source_families=["news", "sns"],
+        created_at="2026-03-24T00:00:00Z",
+    )
+
+    assert len({row["cache_key"] for row in acquisition_rows}) == 2
+
+
+def test_results_status_constants_are_fixed() -> None:
+    assert ALLOWED_RESULT_STATUSES == ("pending", "running", "completed", "failed")
