@@ -115,72 +115,125 @@ external signal 周辺テストの考え方:
 
 ## Session Handoff
 
-### 今回採用した標準比較セット
-
-- matching:
-  - `matching_low`
-  - `matching_baseline`
-  - `matching_high`
-- blended:
-  - `blended_s07_t03_low`
-  - `blended_s07_t03_baseline`
-  - `blended_s05_t05_low`
-  - `blended_s05_t05_baseline`
-  - `blended_s03_t07_baseline`
-
-### この 8 ケースを残した理由
+### 現在の全体状況（要約）
 
 - 事実:
-  - current sample では threshold が主因で、weight は threshold 境界付近でだけ効いた
-  - matching は `1.0 / 1.4 / 2.2` の全帯で entry し、blended は high threshold で no-trade に寄った
-- matching を 3 ケース残す理由:
-  - threshold 感度を low / baseline / high で継続監視するため
-  - `matching_baseline` を第一候補に据えても、`1.0` と `2.2` を消すと threshold 主因の監視が弱くなるため
-- blended を 5 ケースに絞る理由:
-  - 主戦略ではないが、threshold 境界付近で weight 差が効く比較対象としては残す価値があるため
-  - `0.7/0.3`, `0.5/0.5`, `0.3/0.7` を low / baseline 帯で最低限追える構成に絞ると、比較軸を増やしすぎずに weight 差を観測できるため
-- 外したケース:
-  - `blended_s07_t03_high`
-  - `blended_s05_t05_high`
-  - `blended_s03_t07_low`
-  - `blended_s03_t07_high`
-- 外した理由:
-  - blended high 群は current sample で no-trade 側に寄りやすく、標準セットで優先監視する意味が薄い
-  - `blended_s03_t07_low` は weight の広がりとしては読めるが、標準セットでは low / baseline の両帯を全 weight で持つ必要はなく、baseline 側の比較価値を優先した
+  - 現在は「研究用の実行基盤を固める前段」であり、本格的な外部取得・simulation 実行・comparison 実行にはまだ入っていない
+  - 直近では `matching_baseline_exit_relaxed` の最小改善を入れた後、複数期間 × 複数パラメータ検証に向けた dry-run 基盤を段階的に実装していた
+  - 現在の主成果は `periods.csv` / `grids.csv` から run directory、`manifest.csv`、`results_index.csv`、`acquisition_manifest.csv`、`case_acquisition_links.csv`、`unresolved_acquisitions.csv` を生成できること
+  - 共有 cache metadata 実体は `var/cache/external_signals/cache_metadata.csv` に固定され、run 側はその snapshot を保持する構造まで完了している
+- 方針:
+  - 目的に対する現在位置は「取得前の最終 dry-run レイヤをほぼ固めた段階」
+  - 次の自然な段階は、shared cache metadata を使って acquisition 1件を claim / 完了 / 失敗へ更新する取得前提の最小フローを実装すること
+- 推測:
+  - 取得本体に入る前に、shared metadata の排他や stale `running` 回収方針を決める必要が高い
 
-### 現時点の位置づけ
+### 現在の構造・前提（確定事項）
 
-- `matching_baseline`:
-  - `weighted_matching_signal_count` + `entry_count_threshold=1.4`
-  - 現時点の第一候補
-  - ただしロジック既定値ではなく、比較上の主戦略候補
-- blended:
-  - 主軸ではない
-  - threshold 境界付近で weight が効くかを観測する比較対象
-- weight:
-  - 最適化対象ではない
-  - 比較観測対象として保持する
+- 事実:
+  - `simulate` は `returns`、`entry_signals`、`exit_signals` を受ける純粋な評価器として維持する
+  - trading path は `OHLCV -> returns -> signals -> simulate -> comparison / replay / live decision`
+  - external signal path は `fetch -> adapter -> normalize -> save -> observe`
+  - 研究用の新規実装は `src/trade_simulator/research_manifest.py` とその CLI に閉じ、既存 CLI の置き換えにはしない
+  - `period_signature`、`grid_signature`、`case_signature` は役割分離済みで、`note` や `enabled` など非本質項目は signature から除外する
+  - CSV null 仕様は固定済み
+  - 空欄は `null`
+  - 数値 `0` はゼロ値
+  - 文字列 `"null"` は禁止
+  - 必須数値列の空欄は validation error
+  - optional 数値列の空欄は `null`
+  - `results_index.csv` の status は `pending`, `running`, `completed`, `failed` に固定済み
+  - `error_code` は `validation_error`, `runtime_error`, `internal_error` と空欄だけを許容する
+  - acquisition 単位は `source_family × symbol × period_signature` をベースに `cache_key` を作る
+  - `source_family` の現行 allowed values は `news`, `sns`
+  - shared cache metadata の保存先は `var/cache/external_signals/cache_metadata.csv` に固定済み
+  - run directory 側の `cache_metadata.csv` は shared metadata の snapshot であり、再利用の実体ではない
+- 制約:
+  - `simulate` の入出力契約を変えない
+  - I/O とロジックを混ぜない
+  - external signal の責務分離を壊さない
+  - 研究用 dry-run 基盤を comparison / feature / simulate 層へ侵食させない
+  - まだ外部取得本体、cache 本体保存、bundle 生成、simulation 実行、comparison 実行、並列取得は行わない
 
-### 今回ロジック本体を変更しなかった理由
+### 進行中の内容
 
-- sample 数がまだ少なく、series や threshold の優先順位は比較で見る段階だから
-- `simulate` の純粋性、timeline と consumption_features の責務分離、observability 境界を崩す必要がないから
-- 今回の目的は「標準比較セットの整理」であり、signal 計算ロジックを書き換える段階ではないから
+- 事実:
+  - dry-run manifest generator は実装済みで、`periods.csv` と `grids.csv` から run directory 一式を出力できる
+  - `acquisition_manifest.csv` は `source_family × symbol × period` 単位で生成済み
+  - `case_acquisition_links.csv` により case と acquisition の依存が分離済み
+  - `cache_metadata.csv` の schema は固定済みで、shared metadata repository の `load / validate / find / upsert / status update / save` が実装済み
+  - acquisition 状態遷移は `pending -> running -> completed|failed` のみ許容し、それ以外はエラーに固定済み
+  - `unresolved_acquisitions.csv` は shared metadata を参照して生成される
+- 方針:
+  - 次は shared metadata を使った acquisition 1件の最小 claim/update フロー、または取得前の CLI 導線追加が候補
+  - `running` は unresolved から除外する前提なので、今後は stale `running` の扱いを決める必要がある
+- 未確定:
+  - `running` の TTL や回収条件
+  - 共有 metadata 更新時のロック方針
+  - 取得失敗後の retry 方針
 
-### 今回反映した最小変更
+### 重要な整理事項
 
-- `config/real_data_external_signal_series_comparison.example.json` を 8 ケース標準セットに整理
-- matching 3 ケースも `consumption_series_name` を明示し、series / threshold / weight の見え方を揃えた
-- docs に以下を反映:
-  - `matching_baseline` が第一候補
-  - ただし既定値固定ではない
-  - blended は比較対象として残す
-  - blended high 群は標準セットから外す
-  - weight は最適化ではなく観測対象
-- tests は config 解釈、case metadata、no-trade summary 形状を確認する最小追加に留めた
+- 事実:
+  - `matching_baseline_exit_relaxed` は sample 上で baseline より改善したが、一般化検証はまだ未着手
+  - 現在の開発重心は strategy 改善そのものではなく、複数期間 × 複数パラメータ検証を安全に回すための研究用基盤整備に移っている
+  - `project_context.md` の前回 handoff は古い strategy planning 段階の記述だったため、今回更新が必要になった
+  - `cache_key` は `source_family + symbol + period_signature + input_schema_version + cache_key_version` を元に生成する first usable version で固定済み
+  - shared metadata と run snapshot の役割分離は完了している
+- 注意点:
+  - `run_dir/cache_metadata.csv` を shared metadata の実体と誤解しないこと
+  - `unresolved_acquisitions.csv` は shared metadata snapshot を見て作る run 固有の判断結果であり、shared 実体ではない
+  - `running` は未完了ではあるが、unresolved には含めない
+  - `pending` と `failed` と不存在だけが unresolved に残る
+- 不明:
+  - 今後 shared metadata を run ごとにロックするのか、acquisition 単位でロックするのかは未実装
 
-### 次に進むなら何を検証するべきか
+### スコープ管理
 
-- sample を 1 本追加して、`matching_baseline` を第一候補とする判断が再現するか
-- low / baseline 帯で残した blended 5 ケースが、別 sample でも比較対象として有効か
-- standard 8 ケースのままで十分か、それとも full comparison 用の別 config を追加すべきか
+- 今やること:
+  - shared cache metadata を前提に acquisition 1件の最小更新フローへ進める
+  - 取得前提の state machine と snapshot の整合を壊さないように保つ
+  - 研究用 dry-run 基盤の仕様を先に固める
+- 今はやらないこと:
+  - 外部 API 取得本体
+  - cache 本体データ保存
+  - bundle 生成
+  - simulate 実行
+  - comparison 実行
+  - summary 集計
+  - 並列取得
+  - retry 実装
+  - strategy 改善の追加実装を再開すること
+
+### 次セッションでのタスク候補
+
+- 最も自然に進む次の作業:
+  - acquisition 1件に対して shared cache metadata を `pending -> running -> completed|failed` へ更新する取得前処理の最小導線を CLI 付きで追加する
+  - 更新後の shared metadata を見て、新しい run が unresolved を再計算できることを通しで確認する
+- 他に考えられる選択肢:
+  - shared metadata の lock file 方針だけ先に決める
+  - stale `running` 回収や手動解除コマンドの設計から入る
+  - 推測:
+    - acquisition claim 用の小さな CLI を先に作る方が、取得本体より先に状態遷移の破綻を検出しやすい
+
+### 未確定事項 / 論点
+
+- 未確定:
+  - shared metadata 更新時の排他方式
+  - stale `running` の定義と回収手段
+  - `failed` を次 run で自動再取得対象にするだけで十分か
+  - acquisition 実行ログを shared metadata と分けるか同一 run 内で持つか
+- 論点:
+  - shared metadata の更新 API を CLI 中心にするか、関数呼び出し中心にするか
+  - `pending -> completed` を今後も禁止し続けるか
+  - `running` を unresolved から除外する現在ルールに TTL を組み合わせるか
+
+### リスク / 懸念
+
+- 事実:
+  - shared metadata は現在 CSV 全体読み書きの最小実装であり、並列更新には未対応
+  - `running` を unresolved から除外したため、異常終了時に stale 状態が残ると取得が止まる可能性がある
+  - run snapshot と shared 実体の差分が大きくなると、後から見たときに「なぜ unresolved だったか」を見誤りやすい
+- 推測:
+  - 取得本体を先に作るより、lock と stale `running` 対策を先に決めないと将来の再実行で詰まりやすい
+  - strategy 改善タスクへ早く戻りすぎると、研究用実行基盤の土台が中途半端なままになり、複数期間検証で手戻りが増える

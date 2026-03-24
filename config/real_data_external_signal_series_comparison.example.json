@@ -31,6 +31,19 @@
       }
     },
     {
+      "name": "matching_baseline_exit_relaxed",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": ["policy"],
+        "consumption_series_name": "weighted_matching_signal_count",
+        "entry_count_threshold": 1.4,
+        "exit_after_inactive_periods": 2
+      }
+    },
+    {
       "name": "matching_high",
       "initial_cash": 100000,
       "fee_rate": 0.0,
