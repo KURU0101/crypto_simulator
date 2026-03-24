@@ -10,9 +10,11 @@ from trade_simulator.research_manifest import (
     ALLOWED_RESULT_STATUSES,
     CACHE_KEY_VERSION,
     CACHE_METADATA_SCHEMA_VERSION,
+    DEFAULT_SHARED_CACHE_METADATA_PATH,
     ENGINE_VERSION,
     INPUT_SCHEMA_VERSION,
     RESULT_STATUS_PENDING,
+    RESULT_STATUS_RUNNING,
     build_case_acquisition_links,
     build_initial_cache_metadata_rows,
     build_unresolved_acquisition_rows,
@@ -20,11 +22,17 @@ from trade_simulator.research_manifest import (
     build_acquisition_manifest_rows,
     build_manifest_rows,
     generate_research_manifest_run,
+    find_cache_metadata_row,
     load_cache_metadata_rows,
+    load_shared_cache_metadata_rows,
     load_grid_rows,
     load_period_rows,
+    save_shared_cache_metadata_rows,
     select_eligible_signal_only_grids,
+    update_cache_metadata_status,
+    upsert_cache_metadata_row,
     validate_acquisition_status,
+    validate_acquisition_status_transition,
     validate_error_code,
     validate_result_status,
 )
@@ -147,6 +155,7 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
     periods_path = tmp_path / "periods.csv"
     grids_path = tmp_path / "grids.csv"
     run_root_dir = tmp_path / "runs"
+    shared_cache_metadata_path = tmp_path / "shared" / "cache_metadata.csv"
     _write_valid_periods_csv(periods_path)
     _write_valid_grids_csv(grids_path)
 
@@ -155,6 +164,7 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
         grids_path,
         source_families=["news", "sns"],
         run_root_dir=run_root_dir,
+        shared_cache_metadata_path=shared_cache_metadata_path,
         run_id="20260324T010203Z_deadbeef",
     )
 
@@ -193,6 +203,7 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
         "input_schema_version": INPUT_SCHEMA_VERSION,
         "engine_version": ENGINE_VERSION,
         "source_families": ["news", "sns"],
+        "shared_cache_metadata_path": str(shared_cache_metadata_path),
         "periods_file_name": "periods.csv",
         "grids_file_name": "grids.csv",
         "period_row_count": 2,
@@ -455,6 +466,7 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
     periods_path = tmp_path / "periods.csv"
     grids_path = tmp_path / "grids.csv"
     run_root_dir = tmp_path / "runs"
+    shared_cache_metadata_path = tmp_path / "shared" / "cache_metadata.csv"
     _write_valid_periods_csv(periods_path)
     _write_valid_grids_csv(grids_path)
 
@@ -470,6 +482,8 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
             "sns",
             "--run-root-dir",
             str(run_root_dir),
+            "--shared-cache-metadata-path",
+            str(shared_cache_metadata_path),
             "--run-id",
             "20260324T010203Z_deadbeef",
         ]
@@ -483,6 +497,7 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
     assert rendered["manifest_case_count"] == 2
     assert rendered["acquisition_manifest_count"] == 4
     assert rendered["unresolved_acquisition_count"] == 4
+    assert rendered["shared_cache_metadata_path"] == str(shared_cache_metadata_path)
     assert rendered["run_dir"] == str(run_root_dir / "20260324T010203Z_deadbeef")
 
 
@@ -526,6 +541,21 @@ def test_validate_acquisition_status_rejects_invalid_value() -> None:
         validate_acquisition_status("queued")
 
 
+def test_validate_acquisition_status_transition_accepts_allowed_paths() -> None:
+    assert validate_acquisition_status_transition("pending", "running") == "running"
+    assert validate_acquisition_status_transition("running", "completed") == "completed"
+    assert validate_acquisition_status_transition("running", "failed") == "failed"
+
+
+def test_validate_acquisition_status_transition_rejects_disallowed_paths() -> None:
+    with pytest.raises(ValueError, match="invalid acquisition status transition: completed -> running"):
+        validate_acquisition_status_transition("completed", "running")
+    with pytest.raises(ValueError, match="invalid acquisition status transition: failed -> running"):
+        validate_acquisition_status_transition("failed", "running")
+    with pytest.raises(ValueError, match="invalid acquisition status transition: pending -> completed"):
+        validate_acquisition_status_transition("pending", "completed")
+
+
 def test_validate_error_code_requires_value_for_failed_status() -> None:
     with pytest.raises(ValueError, match="error_code is required when status is failed"):
         validate_error_code(status="failed", error_code="", error_message="boom")
@@ -561,6 +591,116 @@ def test_build_acquisition_cache_key_requires_all_inputs() -> None:
 
 def test_build_initial_cache_metadata_rows_starts_empty() -> None:
     assert build_initial_cache_metadata_rows() == []
+
+
+def test_shared_cache_metadata_load_validate_upsert_and_search(tmp_path: Path) -> None:
+    shared_cache_metadata_path = tmp_path / "shared" / "cache_metadata.csv"
+    rows = load_shared_cache_metadata_rows(shared_cache_metadata_path)
+    assert rows == []
+
+    rows = upsert_cache_metadata_row(
+        rows,
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="pending",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+    save_shared_cache_metadata_rows(rows, shared_cache_metadata_path)
+    loaded_rows = load_shared_cache_metadata_rows(shared_cache_metadata_path)
+
+    assert find_cache_metadata_row(loaded_rows, cache_key="cache_a") == {
+        "cache_key": "cache_a",
+        "cache_key_version": CACHE_KEY_VERSION,
+        "source_family": "news",
+        "symbol": "BTCUSD",
+        "period_id": "p_alpha",
+        "period_signature": "sig_alpha",
+        "status": "pending",
+        "created_at": "2026-03-24T00:00:00Z",
+        "updated_at": "2026-03-24T00:00:00Z",
+        "schema_version": CACHE_METADATA_SCHEMA_VERSION,
+    }
+
+
+def test_update_cache_metadata_status_applies_valid_transitions(tmp_path: Path) -> None:
+    rows = upsert_cache_metadata_row(
+        [],
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="pending",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+    rows = update_cache_metadata_status(
+        rows,
+        cache_key="cache_a",
+        next_status="running",
+        updated_at="2026-03-24T00:01:00Z",
+    )
+    rows = update_cache_metadata_status(
+        rows,
+        cache_key="cache_a",
+        next_status="completed",
+        updated_at="2026-03-24T00:02:00Z",
+    )
+
+    assert find_cache_metadata_row(rows, cache_key="cache_a")["status"] == "completed"
+
+
+def test_update_cache_metadata_status_rejects_invalid_transition() -> None:
+    rows = upsert_cache_metadata_row(
+        [],
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="completed",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="invalid acquisition status transition: completed -> running"):
+        update_cache_metadata_status(
+            rows,
+            cache_key="cache_a",
+            next_status="running",
+            updated_at="2026-03-24T00:01:00Z",
+        )
+
+
+def test_upsert_cache_metadata_row_rejects_inconsistent_duplicate_cache_key() -> None:
+    rows = upsert_cache_metadata_row(
+        [],
+        cache_key="cache_a",
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature="sig_alpha",
+        status="pending",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="cache_metadata row mismatch for cache_key cache_a: source_family"):
+        upsert_cache_metadata_row(
+            rows,
+            cache_key="cache_a",
+            source_family="sns",
+            symbol="BTCUSD",
+            period_id="p_alpha",
+            period_signature="sig_alpha",
+            status="pending",
+            created_at="2026-03-24T00:00:00Z",
+            updated_at="2026-03-24T00:00:00Z",
+        )
 
 
 def test_case_to_acquisition_links_are_mechanically_derivable(tmp_path: Path) -> None:
@@ -656,6 +796,32 @@ def test_load_cache_metadata_rows_rejects_invalid_cache_key_version(tmp_path: Pa
     )
 
     with pytest.raises(ValueError, match="cache_key_version must be"):
+        load_cache_metadata_rows(metadata_path)
+
+
+def test_load_cache_metadata_rows_rejects_duplicate_cache_key(tmp_path: Path) -> None:
+    metadata_path = tmp_path / "cache_metadata.csv"
+    _write_csv(
+        metadata_path,
+        [
+            "cache_key",
+            "cache_key_version",
+            "source_family",
+            "symbol",
+            "period_id",
+            "period_signature",
+            "status",
+            "created_at",
+            "updated_at",
+            "schema_version",
+        ],
+        [
+            ["dup_key", CACHE_KEY_VERSION, "news", "BTCUSD", "p1", "sig1", "pending", "t1", "t1", CACHE_METADATA_SCHEMA_VERSION],
+            ["dup_key", CACHE_KEY_VERSION, "news", "BTCUSD", "p1", "sig1", "pending", "t2", "t2", CACHE_METADATA_SCHEMA_VERSION],
+        ],
+    )
+
+    with pytest.raises(ValueError, match="cache_key must be unique in cache_metadata: dup_key"):
         load_cache_metadata_rows(metadata_path)
 
 
@@ -760,9 +926,83 @@ def test_unresolved_acquisition_rows_exclude_completed_cache_entries(tmp_path: P
     assert [row["acquisition_id"] for row in unresolved_rows] == ["news__ETHUSD__p_minimal"]
 
 
+def test_unresolved_acquisition_rows_exclude_running_cache_entries(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    _write_valid_periods_csv(periods_path)
+
+    acquisition_rows = build_acquisition_manifest_rows(
+        load_period_rows(periods_path),
+        run_id="run_fixed",
+        source_families=["news"],
+        created_at="2026-03-24T00:00:00Z",
+    )
+    cache_metadata_rows = [
+        {
+            "cache_key": acquisition_rows[0]["cache_key"],
+            "cache_key_version": CACHE_KEY_VERSION,
+            "source_family": "news",
+            "symbol": "BTCUSD",
+            "period_id": "p_alpha",
+            "period_signature": acquisition_rows[0]["period_signature"],
+            "status": RESULT_STATUS_RUNNING,
+            "created_at": "t1",
+            "updated_at": "t1",
+            "schema_version": CACHE_METADATA_SCHEMA_VERSION,
+        }
+    ]
+
+    unresolved_rows = build_unresolved_acquisition_rows(acquisition_rows, cache_metadata_rows)
+
+    assert [row["acquisition_id"] for row in unresolved_rows] == ["news__ETHUSD__p_minimal"]
+
+
+def test_generate_research_manifest_run_uses_shared_metadata_for_unresolved_and_keeps_snapshot(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_cache_metadata_path = tmp_path / "shared" / "cache_metadata.csv"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+
+    shared_rows = upsert_cache_metadata_row(
+        [],
+        cache_key=build_acquisition_cache_key(
+            source_family="news",
+            symbol="BTCUSD",
+            period_signature=load_period_rows(periods_path)[0]["period_signature"],
+            input_schema_version=INPUT_SCHEMA_VERSION,
+        ),
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature=load_period_rows(periods_path)[0]["period_signature"],
+        status="completed",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+    save_shared_cache_metadata_rows(shared_rows, shared_cache_metadata_path)
+
+    result = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_cache_metadata_path=shared_cache_metadata_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    snapshot_rows = list(csv.DictReader(result.cache_metadata_path.open("r", encoding="utf-8", newline="")))
+    unresolved_rows = list(csv.DictReader(result.unresolved_acquisitions_path.open("r", encoding="utf-8", newline="")))
+
+    assert len(snapshot_rows) == 1
+    assert snapshot_rows[0]["status"] == "completed"
+    assert [row["acquisition_id"] for row in unresolved_rows] == ["news__ETHUSD__p_minimal"]
+
+
 def test_source_family_versions_are_fixed_for_current_supported_families() -> None:
     assert CACHE_KEY_VERSION == "acquisition_cache_v1"
     assert CACHE_METADATA_SCHEMA_VERSION == "cache_metadata_v1"
+    assert DEFAULT_SHARED_CACHE_METADATA_PATH == Path("var/cache/external_signals/cache_metadata.csv")
 
 def test_acquisition_ids_do_not_collide_for_same_symbol_across_periods(tmp_path: Path) -> None:
     periods_path = tmp_path / "periods.csv"

@@ -14,6 +14,7 @@ INPUT_SCHEMA_VERSION = "research_manifest_input_v1"
 ENGINE_VERSION = "research_manifest_dry_run_v1"
 CACHE_KEY_VERSION = "acquisition_cache_v1"
 CACHE_METADATA_SCHEMA_VERSION = "cache_metadata_v1"
+DEFAULT_SHARED_CACHE_METADATA_PATH = Path("var/cache/external_signals/cache_metadata.csv")
 
 RESULT_STATUS_PENDING = "pending"
 RESULT_STATUS_RUNNING = "running"
@@ -177,6 +178,7 @@ class ResearchManifestRun:
     acquisition_manifest_path: Path
     case_acquisition_links_path: Path
     cache_metadata_path: Path
+    shared_cache_metadata_path: Path
     unresolved_acquisitions_path: Path
     metadata_path: Path
     period_row_count: int
@@ -299,6 +301,20 @@ def validate_result_status(status: str) -> str:
 
 def validate_acquisition_status(status: str) -> str:
     return validate_result_status(status)
+
+
+def validate_acquisition_status_transition(current_status: str, next_status: str) -> str:
+    resolved_current = validate_acquisition_status(current_status)
+    resolved_next = validate_acquisition_status(next_status)
+    allowed_transitions = {
+        RESULT_STATUS_PENDING: {RESULT_STATUS_RUNNING},
+        RESULT_STATUS_RUNNING: {RESULT_STATUS_COMPLETED, RESULT_STATUS_FAILED},
+        RESULT_STATUS_COMPLETED: set(),
+        RESULT_STATUS_FAILED: set(),
+    }
+    if resolved_next not in allowed_transitions[resolved_current]:
+        raise ValueError(f"invalid acquisition status transition: {resolved_current} -> {resolved_next}")
+    return resolved_next
 
 
 def validate_error_code(*, status: str, error_code: str, error_message: str) -> str:
@@ -536,6 +552,7 @@ def build_initial_cache_metadata_rows() -> list[dict[str, object]]:
 def load_cache_metadata_rows(csv_path: str | Path) -> list[dict[str, str]]:
     rows = _read_csv_rows(csv_path, required_columns=CACHE_METADATA_COLUMNS, entity_name="cache_metadata")
     normalized_rows: list[dict[str, str]] = []
+    seen_cache_keys: dict[str, dict[str, str]] = {}
 
     for row in rows:
         status = validate_acquisition_status(_parse_required_text(row, "status"))
@@ -546,22 +563,154 @@ def load_cache_metadata_rows(csv_path: str | Path) -> list[dict[str, str]]:
         if cache_key_version != CACHE_KEY_VERSION:
             raise ValueError(f"cache_key_version must be {CACHE_KEY_VERSION}")
 
-        normalized_rows.append(
-            {
-                "cache_key": _parse_required_text(row, "cache_key"),
-                "cache_key_version": cache_key_version,
-                "source_family": _parse_required_text(row, "source_family"),
-                "symbol": _parse_required_text(row, "symbol"),
-                "period_id": _parse_required_text(row, "period_id"),
-                "period_signature": _parse_required_text(row, "period_signature"),
-                "status": status,
-                "created_at": _parse_required_text(row, "created_at"),
-                "updated_at": _parse_required_text(row, "updated_at"),
-                "schema_version": schema_version,
-            }
-        )
+        normalized_row = {
+            "cache_key": _parse_required_text(row, "cache_key"),
+            "cache_key_version": cache_key_version,
+            "source_family": _parse_required_text(row, "source_family"),
+            "symbol": _parse_required_text(row, "symbol"),
+            "period_id": _parse_required_text(row, "period_id"),
+            "period_signature": _parse_required_text(row, "period_signature"),
+            "status": status,
+            "created_at": _parse_required_text(row, "created_at"),
+            "updated_at": _parse_required_text(row, "updated_at"),
+            "schema_version": schema_version,
+        }
+        existing_row = seen_cache_keys.get(normalized_row["cache_key"])
+        if existing_row is not None:
+            raise ValueError(f'cache_key must be unique in cache_metadata: {normalized_row["cache_key"]}')
+        seen_cache_keys[normalized_row["cache_key"]] = normalized_row
+        normalized_rows.append(normalized_row)
 
     return normalized_rows
+
+
+def load_shared_cache_metadata_rows(
+    shared_cache_metadata_path: str | Path = DEFAULT_SHARED_CACHE_METADATA_PATH,
+) -> list[dict[str, str]]:
+    path = Path(shared_cache_metadata_path)
+    if not path.exists():
+        return []
+    return load_cache_metadata_rows(path)
+
+
+def find_cache_metadata_row(
+    cache_metadata_rows: list[dict[str, str]],
+    *,
+    cache_key: str,
+) -> dict[str, str] | None:
+    matches = [row for row in cache_metadata_rows if row["cache_key"] == cache_key]
+    if len(matches) > 1:
+        raise ValueError(f"cache_key must be unique in cache_metadata: {cache_key}")
+    if not matches:
+        return None
+    return matches[0]
+
+
+def _build_cache_metadata_row(
+    *,
+    cache_key: str,
+    source_family: str,
+    symbol: str,
+    period_id: str,
+    period_signature: str,
+    status: str,
+    created_at: str,
+    updated_at: str,
+) -> dict[str, str]:
+    return {
+        "cache_key": cache_key,
+        "cache_key_version": CACHE_KEY_VERSION,
+        "source_family": source_family,
+        "symbol": symbol,
+        "period_id": period_id,
+        "period_signature": period_signature,
+        "status": validate_acquisition_status(status),
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "schema_version": CACHE_METADATA_SCHEMA_VERSION,
+    }
+
+
+def upsert_cache_metadata_row(
+    cache_metadata_rows: list[dict[str, str]],
+    *,
+    cache_key: str,
+    source_family: str,
+    symbol: str,
+    period_id: str,
+    period_signature: str,
+    status: str,
+    created_at: str,
+    updated_at: str,
+) -> list[dict[str, str]]:
+    new_row = _build_cache_metadata_row(
+        cache_key=cache_key,
+        source_family=source_family,
+        symbol=symbol,
+        period_id=period_id,
+        period_signature=period_signature,
+        status=status,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+    existing_row = find_cache_metadata_row(cache_metadata_rows, cache_key=cache_key)
+    if existing_row is None:
+        return [*cache_metadata_rows, new_row]
+
+    immutable_columns = ("cache_key", "cache_key_version", "source_family", "symbol", "period_id", "period_signature", "schema_version")
+    for column in immutable_columns:
+        if existing_row[column] != new_row[column]:
+            raise ValueError(f"cache_metadata row mismatch for cache_key {cache_key}: {column}")
+
+    updated_rows: list[dict[str, str]] = []
+    for row in cache_metadata_rows:
+        if row["cache_key"] == cache_key:
+            updated_rows.append(
+                {
+                    **row,
+                    "status": new_row["status"],
+                    "updated_at": updated_at,
+                }
+            )
+        else:
+            updated_rows.append(row)
+    return updated_rows
+
+
+def update_cache_metadata_status(
+    cache_metadata_rows: list[dict[str, str]],
+    *,
+    cache_key: str,
+    next_status: str,
+    updated_at: str,
+) -> list[dict[str, str]]:
+    existing_row = find_cache_metadata_row(cache_metadata_rows, cache_key=cache_key)
+    if existing_row is None:
+        raise ValueError(f"cache_key not found in cache_metadata: {cache_key}")
+    validate_acquisition_status_transition(existing_row["status"], next_status)
+    updated_rows: list[dict[str, str]] = []
+    for row in cache_metadata_rows:
+        if row["cache_key"] == cache_key:
+            updated_rows.append(
+                {
+                    **row,
+                    "status": next_status,
+                    "updated_at": updated_at,
+                }
+            )
+        else:
+            updated_rows.append(row)
+    return updated_rows
+
+
+def save_shared_cache_metadata_rows(
+    cache_metadata_rows: list[dict[str, str]],
+    shared_cache_metadata_path: str | Path = DEFAULT_SHARED_CACHE_METADATA_PATH,
+) -> Path:
+    path = Path(shared_cache_metadata_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_csv(path, CACHE_METADATA_COLUMNS, cache_metadata_rows)
+    return path
 
 
 def build_acquisition_manifest_rows(
@@ -635,16 +784,17 @@ def build_unresolved_acquisition_rows(
     acquisition_manifest_rows: list[dict[str, object]],
     cache_metadata_rows: list[dict[str, str]],
 ) -> list[dict[str, object]]:
-    completed_cache_keys = {
-        row["cache_key"]
-        for row in cache_metadata_rows
-        if row["status"] == RESULT_STATUS_COMPLETED
-    }
-    return [
-        row
-        for row in acquisition_manifest_rows
-        if row["cache_key"] not in completed_cache_keys
-    ]
+    resolved_by_cache_key = {row["cache_key"]: row["status"] for row in cache_metadata_rows}
+    unresolved_rows: list[dict[str, object]] = []
+    for row in acquisition_manifest_rows:
+        cache_status = resolved_by_cache_key.get(str(row["cache_key"]))
+        # Running acquisitions are excluded from unresolved output so later runs do not try to
+        # claim work that another run has already marked in progress. Pending, failed, and missing
+        # cache metadata rows stay unresolved because they still require acquisition work.
+        if cache_status in (RESULT_STATUS_COMPLETED, RESULT_STATUS_RUNNING):
+            continue
+        unresolved_rows.append(row)
+    return unresolved_rows
 
 
 def _write_csv(path: Path, fieldnames: tuple[str, ...], rows: list[dict[str, object]]) -> None:
@@ -661,6 +811,7 @@ def generate_research_manifest_run(
     *,
     source_families: list[str] | tuple[str, ...],
     run_root_dir: str | Path = "var/research_runs",
+    shared_cache_metadata_path: str | Path = DEFAULT_SHARED_CACHE_METADATA_PATH,
     run_id: str | None = None,
     created_at: datetime | None = None,
 ) -> ResearchManifestRun:
@@ -680,8 +831,8 @@ def generate_research_manifest_run(
         created_at=created_at_text,
     )
     case_acquisition_link_rows = build_case_acquisition_links(manifest_rows, acquisition_manifest_rows)
-    cache_metadata_rows = build_initial_cache_metadata_rows()
-    unresolved_acquisition_rows = build_unresolved_acquisition_rows(acquisition_manifest_rows, cache_metadata_rows)
+    shared_cache_metadata_rows = load_shared_cache_metadata_rows(shared_cache_metadata_path)
+    unresolved_acquisition_rows = build_unresolved_acquisition_rows(acquisition_manifest_rows, shared_cache_metadata_rows)
 
     run_dir = Path(run_root_dir) / resolved_run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -702,7 +853,7 @@ def generate_research_manifest_run(
     _write_csv(results_index_path, RESULTS_INDEX_COLUMNS, results_index_rows)
     _write_csv(acquisition_manifest_path, ACQUISITION_MANIFEST_COLUMNS, acquisition_manifest_rows)
     _write_csv(case_acquisition_links_path, CASE_ACQUISITION_LINK_COLUMNS, case_acquisition_link_rows)
-    _write_csv(cache_metadata_path, CACHE_METADATA_COLUMNS, cache_metadata_rows)
+    _write_csv(cache_metadata_path, CACHE_METADATA_COLUMNS, shared_cache_metadata_rows)
     _write_csv(unresolved_acquisitions_path, ACQUISITION_MANIFEST_COLUMNS, unresolved_acquisition_rows)
 
     metadata = {
@@ -711,6 +862,7 @@ def generate_research_manifest_run(
         "input_schema_version": INPUT_SCHEMA_VERSION,
         "engine_version": ENGINE_VERSION,
         "source_families": normalize_source_families(source_families),
+        "shared_cache_metadata_path": str(Path(shared_cache_metadata_path)),
         "periods_file_name": periods_copy_path.name,
         "grids_file_name": grids_copy_path.name,
         "period_row_count": len(period_rows),
@@ -718,7 +870,7 @@ def generate_research_manifest_run(
         "eligible_grid_row_count": len(eligible_grid_rows),
         "manifest_case_count": len(manifest_rows),
         "acquisition_manifest_count": len(acquisition_manifest_rows),
-        "cache_metadata_row_count": len(cache_metadata_rows),
+        "cache_metadata_row_count": len(shared_cache_metadata_rows),
         "case_acquisition_link_count": len(case_acquisition_link_rows),
         "unresolved_acquisition_count": len(unresolved_acquisition_rows),
     }
@@ -734,6 +886,7 @@ def generate_research_manifest_run(
         acquisition_manifest_path=acquisition_manifest_path,
         case_acquisition_links_path=case_acquisition_links_path,
         cache_metadata_path=cache_metadata_path,
+        shared_cache_metadata_path=Path(shared_cache_metadata_path),
         unresolved_acquisitions_path=unresolved_acquisitions_path,
         metadata_path=metadata_path,
         period_row_count=len(period_rows),
