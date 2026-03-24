@@ -77,6 +77,31 @@
 - grouping は `entity_kind` と `entity_key` で判別する
 - 後段で symbol 紐付けが必要になった時点で、別レイヤで topic-to-symbol 解決を追加する
 
+## Standard Comparison Set
+
+external signal の real-data comparison では、`config/real_data_external_signal_series_comparison.example.json` を標準 8 ケースとして扱います。
+
+- matching:
+  - `matching_low`
+  - `matching_baseline`
+  - `matching_high`
+- blended:
+  - `blended_s07_t03_low`
+  - `blended_s07_t03_baseline`
+  - `blended_s05_t05_low`
+  - `blended_s05_t05_baseline`
+  - `blended_s03_t07_baseline`
+
+方針:
+
+- 第一候補は `weighted_matching_signal_count` + `entry_count_threshold=1.4` の `matching_baseline`
+- ただしこれはロジック既定値ではなく、比較上の主戦略候補
+- matching は threshold が主因であることを継続監視するため `low / baseline / high` を残す
+- blended は主軸ではないが、threshold 境界付近で weight が効くかを観測する比較対象として残す
+- blended は low / baseline を中心に残し、`0.7/0.3`, `0.5/0.5`, `0.3/0.7` の最低限比較に絞る
+- high threshold の blended 群は current sample で no-trade 側に寄りやすく、標準セットから外す
+- weight は現時点で最適化対象ではなく、比較観測対象として扱う
+
 ## 欠損値
 
 - 必須項目の欠損は validation error
