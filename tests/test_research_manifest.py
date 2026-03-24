@@ -28,10 +28,12 @@ from trade_simulator.research_manifest import (
     complete_shared_cache_entry,
     delete_legacy_shared_cache_metadata_csv,
     fail_shared_cache_entry,
+    fetch_acquisition_payload,
     build_manifest_rows,
     find_shared_cache_entry,
     generate_research_manifest_run,
     heartbeat_shared_cache_entry,
+    orchestrate_research_acquisition,
     find_cache_metadata_row,
     get_shared_state_schema_version,
     initialize_shared_state_db,
@@ -247,6 +249,9 @@ def test_generate_research_manifest_run_creates_manifest_and_fixed_input_copies(
         "engine_version": ENGINE_VERSION,
         "source_families": ["news", "sns"],
         "shared_state_db_path": str(shared_state_db_path),
+        "shared_state_role": "runtime_truth",
+        "cache_metadata_snapshot_role": "run_start_audit_repro_snapshot",
+        "unresolved_acquisitions_role": "run_start_decision_record_recheck_shared_truth_before_execution",
         "periods_file_name": "periods.csv",
         "grids_file_name": "grids.csv",
         "period_row_count": 2,
@@ -541,6 +546,7 @@ def test_research_manifest_cli_prints_run_summary(tmp_path: Path, capsys: pytest
     assert rendered["acquisition_manifest_count"] == 4
     assert rendered["unresolved_acquisition_count"] == 4
     assert rendered["shared_state_db_path"] == str(shared_state_db_path)
+    assert rendered["shared_state_role"] == "runtime_truth"
     assert rendered["run_dir"] == str(run_root_dir / "20260324T010203Z_deadbeef")
 
 
@@ -1223,6 +1229,17 @@ def test_claim_shared_cache_entry_rejects_running_entry_with_broken_lease_fields
         )
 
 
+def test_fetch_acquisition_payload_rejects_unsupported_source_family() -> None:
+    with pytest.raises(ValueError, match="unsupported source_family for fetch"):
+        fetch_acquisition_payload(
+            {
+                "acquisition_id": "bad_aq",
+                "cache_key": "bad_cache",
+                "source_family": "podcast",
+            }
+        )
+
+
 def test_update_cache_metadata_status_applies_valid_transitions(tmp_path: Path) -> None:
     rows = upsert_cache_metadata_row(
         [],
@@ -1593,6 +1610,225 @@ def test_generate_research_manifest_run_uses_shared_metadata_for_unresolved_and_
     assert len(snapshot_rows) == 1
     assert snapshot_rows[0]["status"] == "completed"
     assert [row["acquisition_id"] for row in unresolved_rows] == ["news__ETHUSD__p_minimal"]
+
+
+def test_orchestrate_research_acquisition_completes_using_shared_truth(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    run = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    result = orchestrate_research_acquisition(
+        run.run_dir,
+        acquisition_id="news__BTCUSD__p_alpha",
+        claimed_by="worker-a",
+        lease_duration_seconds=300,
+    )
+    shared_truth = find_shared_cache_entry(shared_state_db_path, cache_key=result["cache_key"])
+
+    assert result["decision_source"] == "shared_truth"
+    assert result["outcome"] == "completed"
+    assert shared_truth is not None
+    assert shared_truth["status"] == "completed"
+
+
+def test_orchestrate_research_acquisition_marks_failed_when_fetch_raises(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    run = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    def failing_fetcher(_: dict[str, str]) -> dict[str, object]:
+        raise RuntimeError("boom")
+
+    result = orchestrate_research_acquisition(
+        run.run_dir,
+        acquisition_id="news__BTCUSD__p_alpha",
+        claimed_by="worker-a",
+        lease_duration_seconds=300,
+        fetcher=failing_fetcher,
+    )
+    shared_truth = find_shared_cache_entry(shared_state_db_path, cache_key=str(result["cache_key"]))
+
+    assert result["outcome"] == "failed"
+    assert shared_truth is not None
+    assert shared_truth["status"] == "failed"
+
+
+def test_orchestrate_research_acquisition_rechecks_shared_truth_after_run_snapshot(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    run = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    btc_period = load_period_rows(periods_path)[0]
+    completed_row = upsert_shared_cache_entry(
+        shared_state_db_path,
+        cache_key=build_acquisition_cache_key(
+            source_family="news",
+            symbol="BTCUSD",
+            period_signature=str(btc_period["period_signature"]),
+            input_schema_version=INPUT_SCHEMA_VERSION,
+        ),
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature=str(btc_period["period_signature"]),
+        status="completed",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+    )
+
+    snapshot_rows = list(csv.DictReader(run.cache_metadata_path.open("r", encoding="utf-8", newline="")))
+    unresolved_rows = list(csv.DictReader(run.unresolved_acquisitions_path.open("r", encoding="utf-8", newline="")))
+    result = orchestrate_research_acquisition(
+        run.run_dir,
+        acquisition_id="news__BTCUSD__p_alpha",
+        claimed_by="worker-a",
+        lease_duration_seconds=300,
+    )
+
+    assert snapshot_rows == []
+    assert any(row["acquisition_id"] == "news__BTCUSD__p_alpha" for row in unresolved_rows)
+    assert completed_row["status"] == "completed"
+    assert result["outcome"] == "skipped"
+    assert result["shared_truth_status_after"] == "completed"
+
+
+def test_orchestrate_research_acquisition_does_not_reclaim_active_running_from_snapshot(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    run = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    btc_period = load_period_rows(periods_path)[0]
+    upsert_shared_cache_entry(
+        shared_state_db_path,
+        cache_key=build_acquisition_cache_key(
+            source_family="news",
+            symbol="BTCUSD",
+            period_signature=str(btc_period["period_signature"]),
+            input_schema_version=INPUT_SCHEMA_VERSION,
+        ),
+        source_family="news",
+        symbol="BTCUSD",
+        period_id="p_alpha",
+        period_signature=str(btc_period["period_signature"]),
+        status="running",
+        created_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+        claimed_at="2026-03-24T00:00:00Z",
+        claimed_by="worker-b",
+        lease_expires_at="2099-01-01T00:00:00Z",
+        last_heartbeat_at="2026-03-24T00:00:00Z",
+    )
+
+    result = orchestrate_research_acquisition(
+        run.run_dir,
+        acquisition_id="news__BTCUSD__p_alpha",
+        claimed_by="worker-a",
+        lease_duration_seconds=300,
+    )
+
+    assert result["outcome"] == "skipped"
+    assert result["shared_truth_status_after"] == "running"
+
+
+def test_orchestrate_research_acquisition_rejects_snapshot_decision_source(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    run = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+
+    with pytest.raises(ValueError, match="decision_source must be shared_truth"):
+        orchestrate_research_acquisition(
+            run.run_dir,
+            acquisition_id="news__BTCUSD__p_alpha",
+            claimed_by="worker-a",
+            lease_duration_seconds=300,
+            decision_source="snapshot",
+        )
+
+
+def test_orchestrate_research_acquisition_rejects_shared_truth_access_failure(tmp_path: Path) -> None:
+    periods_path = tmp_path / "periods.csv"
+    grids_path = tmp_path / "grids.csv"
+    run_root_dir = tmp_path / "runs"
+    shared_state_db_path = tmp_path / "shared" / "shared_state.sqlite3"
+    _write_valid_periods_csv(periods_path)
+    _write_valid_grids_csv(grids_path)
+    run = generate_research_manifest_run(
+        periods_path,
+        grids_path,
+        source_families=["news"],
+        run_root_dir=run_root_dir,
+        shared_state_db_path=shared_state_db_path,
+        run_id="20260324T010203Z_deadbeef",
+    )
+    metadata_path = run.run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    broken_path = tmp_path / "broken_db_dir"
+    broken_path.mkdir(parents=True, exist_ok=True)
+    metadata["shared_state_db_path"] = str(broken_path)
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="failed to open shared state db"):
+        orchestrate_research_acquisition(
+            run.run_dir,
+            acquisition_id="news__BTCUSD__p_alpha",
+            claimed_by="worker-a",
+            lease_duration_seconds=300,
+        )
 
 
 def test_generate_research_manifest_run_excludes_running_and_keeps_pending_failed_from_sqlite(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Callable, Optional
 
 INPUT_SCHEMA_VERSION = "research_manifest_input_v1"
 ENGINE_VERSION = "research_manifest_dry_run_v1"
@@ -1517,6 +1518,161 @@ def _write_csv(path: Path, fieldnames: tuple[str, ...], rows: list[dict[str, obj
             writer.writerow(row)
 
 
+def _load_json_object(path: Path, *, entity_name: str) -> dict[str, object]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{entity_name} must be a JSON object")
+    return payload
+
+
+def load_research_run_metadata(run_dir: str | Path) -> dict[str, object]:
+    return _load_json_object(Path(run_dir) / "metadata.json", entity_name="research run metadata")
+
+
+def load_run_acquisition_manifest_row(
+    run_dir: str | Path,
+    *,
+    acquisition_id: str,
+) -> dict[str, str]:
+    rows = _read_csv_rows(
+        Path(run_dir) / "acquisition_manifest.csv",
+        required_columns=ACQUISITION_MANIFEST_COLUMNS,
+        entity_name="acquisition_manifest",
+    )
+    matches = [row for row in rows if row["acquisition_id"] == acquisition_id]
+    if len(matches) > 1:
+        raise ValueError(f"acquisition_id must be unique in acquisition_manifest: {acquisition_id}")
+    if not matches:
+        raise ValueError(f"acquisition_id not found in acquisition_manifest: {acquisition_id}")
+    return matches[0]
+
+
+def ensure_shared_cache_entry_for_acquisition(
+    db_path: str | Path,
+    *,
+    acquisition_row: dict[str, str],
+    created_at: str,
+) -> dict[str, str]:
+    existing_row = find_shared_cache_entry(db_path, cache_key=acquisition_row["cache_key"])
+    if existing_row is not None:
+        return existing_row
+    return upsert_shared_cache_entry(
+        db_path,
+        cache_key=acquisition_row["cache_key"],
+        source_family=acquisition_row["source_family"],
+        symbol=acquisition_row["symbol"],
+        period_id=acquisition_row["period_id"],
+        period_signature=acquisition_row["period_signature"],
+        status=RESULT_STATUS_PENDING,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+
+def fetch_acquisition_payload(acquisition_row: dict[str, str]) -> dict[str, object]:
+    source_family = acquisition_row["source_family"]
+    if source_family not in ALLOWED_SOURCE_FAMILIES:
+        raise ValueError(f"unsupported source_family for fetch: {source_family}")
+    return {
+        "source_family": source_family,
+        "fetch_mode": "stub",
+        "cache_key": acquisition_row["cache_key"],
+        "acquisition_id": acquisition_row["acquisition_id"],
+    }
+
+
+def orchestrate_research_acquisition(
+    run_dir: str | Path,
+    *,
+    acquisition_id: str,
+    claimed_by: str,
+    lease_duration_seconds: int,
+    fetcher: Optional[Callable[[dict[str, str]], dict[str, object]]] = None,
+    decision_source: str = "shared_truth",
+) -> dict[str, object]:
+    if decision_source != "shared_truth":
+        raise ValueError("decision_source must be shared_truth")
+    resolved_run_dir = Path(run_dir)
+    run_metadata = load_research_run_metadata(resolved_run_dir)
+    shared_state_db_path = str(run_metadata.get("shared_state_db_path", "")).strip()
+    if not shared_state_db_path:
+        raise ValueError("research run metadata must include shared_state_db_path")
+
+    acquisition_row = load_run_acquisition_manifest_row(resolved_run_dir, acquisition_id=acquisition_id)
+    execution_started_at = _render_utc_datetime(_utc_now())
+    ensure_shared_cache_entry_for_acquisition(
+        shared_state_db_path,
+        acquisition_row=acquisition_row,
+        created_at=execution_started_at,
+    )
+    shared_truth_before = find_shared_cache_entry(shared_state_db_path, cache_key=acquisition_row["cache_key"])
+
+    try:
+        claim_shared_cache_entry(
+            shared_state_db_path,
+            cache_key=acquisition_row["cache_key"],
+            claimed_by=claimed_by,
+            claimed_at=execution_started_at,
+            lease_duration_seconds=lease_duration_seconds,
+        )
+    except ValueError as exc:
+        latest_shared_truth = find_shared_cache_entry(shared_state_db_path, cache_key=acquisition_row["cache_key"])
+        return {
+            "run_dir": str(resolved_run_dir),
+            "acquisition_id": acquisition_id,
+            "cache_key": acquisition_row["cache_key"],
+            "decision_source": decision_source,
+            "outcome": "skipped",
+            "skip_reason": "shared_truth_not_claimable",
+            "shared_truth_status_before": None if shared_truth_before is None else shared_truth_before["status"],
+            "shared_truth_status_after": None if latest_shared_truth is None else latest_shared_truth["status"],
+            "message": str(exc),
+        }
+
+    active_fetcher = fetcher or fetch_acquisition_payload
+    try:
+        fetch_result = active_fetcher(acquisition_row)
+    except Exception as exc:
+        failed_at = _render_utc_datetime(_utc_now())
+        failed_row = fail_shared_cache_entry(
+            shared_state_db_path,
+            cache_key=acquisition_row["cache_key"],
+            claimed_by=claimed_by,
+            failed_at=failed_at,
+            retryable=False,
+            last_error_code="runtime_error",
+        )
+        return {
+            "run_dir": str(resolved_run_dir),
+            "acquisition_id": acquisition_id,
+            "cache_key": acquisition_row["cache_key"],
+            "decision_source": decision_source,
+            "outcome": "failed",
+            "shared_truth_status_before": None if shared_truth_before is None else shared_truth_before["status"],
+            "shared_truth_status_after": failed_row["status"],
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
+
+    completed_at = _render_utc_datetime(_utc_now())
+    completed_row = complete_shared_cache_entry(
+        shared_state_db_path,
+        cache_key=acquisition_row["cache_key"],
+        claimed_by=claimed_by,
+        completed_at=completed_at,
+    )
+    return {
+        "run_dir": str(resolved_run_dir),
+        "acquisition_id": acquisition_id,
+        "cache_key": acquisition_row["cache_key"],
+        "decision_source": decision_source,
+        "outcome": "completed",
+        "shared_truth_status_before": None if shared_truth_before is None else shared_truth_before["status"],
+        "shared_truth_status_after": completed_row["status"],
+        "fetch_result": fetch_result,
+    }
+
+
 def generate_research_manifest_run(
     periods_csv_path: str | Path,
     grids_csv_path: str | Path,
@@ -1527,6 +1683,8 @@ def generate_research_manifest_run(
     run_id: str | None = None,
     created_at: datetime | None = None,
 ) -> ResearchManifestRun:
+    # Run artifacts capture the run-start view for audit/repro. Later claim/skip decisions must
+    # re-check shared_state_db_path instead of trusting these CSV snapshots.
     resolved_created_at = created_at or _utc_now()
     resolved_run_id = run_id or generate_run_id(resolved_created_at)
     created_at_text = resolved_created_at.isoformat().replace("+00:00", "Z")
@@ -1576,6 +1734,9 @@ def generate_research_manifest_run(
         "engine_version": ENGINE_VERSION,
         "source_families": normalize_source_families(source_families),
         "shared_state_db_path": str(Path(shared_state_db_path)),
+        "shared_state_role": "runtime_truth",
+        "cache_metadata_snapshot_role": "run_start_audit_repro_snapshot",
+        "unresolved_acquisitions_role": "run_start_decision_record_recheck_shared_truth_before_execution",
         "periods_file_name": periods_copy_path.name,
         "grids_file_name": grids_copy_path.name,
         "period_row_count": len(period_rows),
