@@ -226,6 +226,76 @@ def test_run_comparisons_returns_one_summary_per_case() -> None:
     ]
 
 
+def test_run_comparisons_includes_external_signal_metadata_for_manual_cases() -> None:
+    comparisons = run_comparisons(
+        [
+            {
+                "name": "external_signal_case",
+                "simulation_name": "external_signal_case",
+                "strategy": "manual",
+                "initial_cash": 1000,
+                "fee_rate": 0.0,
+                "slippage_rate": 0.0,
+                "returns": [0.1, -0.05, 0.02],
+                "entry_signals": [False, True, False],
+                "exit_signals": [False, False, True],
+                "external_signal": {
+                    "consumption_series_name": "blended_weighted_signal_count",
+                    "blended_weights": {
+                        "symbol": 0.5,
+                        "topic": 0.5,
+                    },
+                },
+                "external_signal_consumption_features": {
+                    "return_timestamps": [
+                        "2024-01-01T01:00:00Z",
+                        "2024-01-01T02:00:00Z",
+                        "2024-01-01T03:00:00Z",
+                    ],
+                    "summary": {
+                        "blended_definition": {
+                            "base_series": [
+                                "weighted_symbol_signal_count",
+                                "weighted_topic_signal_count",
+                            ],
+                            "weights": {
+                                "symbol_weight": 0.5,
+                                "topic_weight": 0.5,
+                            },
+                        }
+                    },
+                },
+            }
+        ]
+    )
+
+    assert comparisons[0]["external_signal"] == {
+        "consumption_series_name": "blended_weighted_signal_count",
+        "blended_weights": {
+            "symbol": 0.5,
+            "topic": 0.5,
+        },
+        "blended_definition": {
+            "base_series": [
+                "weighted_symbol_signal_count",
+                "weighted_topic_signal_count",
+            ],
+            "weights": {
+                "symbol_weight": 0.5,
+                "topic_weight": 0.5,
+            },
+        },
+    }
+    assert comparisons[0]["signal_summary"] == {
+        "entry_signal_count": 1,
+        "exit_signal_count": 1,
+        "entry_signal_indexes": [1],
+        "exit_signal_indexes": [2],
+        "entry_signal_timestamps": ["2024-01-01T02:00:00Z"],
+        "exit_signal_timestamps": ["2024-01-01T03:00:00Z"],
+    }
+
+
 def test_run_comparisons_matches_single_simulation_summary() -> None:
     case = {
         "name": "baseline",

@@ -546,6 +546,17 @@ def test_format_real_data_comparison_results_includes_data_summary() -> None:
     assert '"results"' in rendered
 
 
+def test_load_real_data_comparison_config_reads_external_signal_series_comparison_example() -> None:
+    data_source, cases = load_real_data_comparison_config("config/real_data_external_signal_series_comparison.example.json")
+
+    assert data_source["data_source"]["symbol"] == "BTC/USDT"
+    assert [case["name"] for case in cases] == [
+        "external_signal_matching_default",
+        "external_signal_blended_default",
+        "external_signal_blended_equal",
+    ]
+
+
 def test_market_data_cli_main_prints_summary(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = market_data_main(["--config", "config/real_data_comparison.example.json"])
 

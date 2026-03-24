@@ -1,0 +1,50 @@
+{
+  "data_source": {
+    "symbol": "BTC/USDT",
+    "ohlcv_csv_path": "data/market/btcusdt/1h_sample.csv"
+  },
+  "cases": [
+    {
+      "name": "external_signal_matching_default",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": ["policy"],
+        "entry_count_threshold": 1.4,
+        "exit_after_inactive_periods": 1
+      }
+    },
+    {
+      "name": "external_signal_blended_default",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": ["policy"],
+        "entry_count_threshold": 1.4,
+        "exit_after_inactive_periods": 1,
+        "consumption_series_name": "blended_weighted_signal_count"
+      }
+    },
+    {
+      "name": "external_signal_blended_equal",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": ["policy"],
+        "entry_count_threshold": 1.4,
+        "exit_after_inactive_periods": 1,
+        "consumption_series_name": "blended_weighted_signal_count",
+        "blended_weights": {
+          "symbol": 0.5,
+          "topic": 0.5
+        }
+      }
+    }
+  ]
+}

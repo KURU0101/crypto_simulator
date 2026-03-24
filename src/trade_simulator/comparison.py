@@ -104,6 +104,71 @@ def summarize_case_result(name: str, result: dict) -> dict:
     return summary
 
 
+def _true_signal_indexes(signals: object) -> list[int]:
+    if not isinstance(signals, list):
+        return []
+    return [index for index, value in enumerate(signals) if value is True]
+
+
+def _true_signal_timestamps(signals: object, return_timestamps: object) -> list[str]:
+    if not isinstance(signals, list) or not isinstance(return_timestamps, list):
+        return []
+
+    timestamps: list[str] = []
+    for index, value in enumerate(signals):
+        if value is not True:
+            continue
+        if index >= len(return_timestamps):
+            continue
+        timestamp = return_timestamps[index]
+        if isinstance(timestamp, str):
+            timestamps.append(timestamp)
+    return timestamps
+
+
+def _build_external_signal_comparison_metadata(case: dict) -> dict:
+    external_signal = case.get("external_signal")
+    if not isinstance(external_signal, dict):
+        return {}
+
+    metadata: dict[str, object] = {
+        "external_signal": {
+            "consumption_series_name": external_signal.get("consumption_series_name", "weighted_matching_signal_count"),
+        }
+    }
+
+    blended_weights = external_signal.get("blended_weights")
+    if isinstance(blended_weights, dict):
+        metadata["external_signal"]["blended_weights"] = {
+            "symbol": blended_weights.get("symbol"),
+            "topic": blended_weights.get("topic"),
+        }
+
+    consumption_features = case.get("external_signal_consumption_features")
+    if isinstance(consumption_features, dict):
+        summary = consumption_features.get("summary")
+        if isinstance(summary, dict):
+            blended_definition = summary.get("blended_definition")
+            if isinstance(blended_definition, dict):
+                metadata["external_signal"]["blended_definition"] = dict(blended_definition)
+
+        return_timestamps = consumption_features.get("return_timestamps")
+    else:
+        return_timestamps = None
+
+    entry_indexes = _true_signal_indexes(case.get("entry_signals"))
+    exit_indexes = _true_signal_indexes(case.get("exit_signals"))
+    metadata["signal_summary"] = {
+        "entry_signal_count": len(entry_indexes),
+        "exit_signal_count": len(exit_indexes),
+        "entry_signal_indexes": entry_indexes,
+        "exit_signal_indexes": exit_indexes,
+        "entry_signal_timestamps": _true_signal_timestamps(case.get("entry_signals"), return_timestamps),
+        "exit_signal_timestamps": _true_signal_timestamps(case.get("exit_signals"), return_timestamps),
+    }
+    return metadata
+
+
 def run_case(case: dict) -> dict:
     strategy = case.get("strategy")
 
@@ -133,6 +198,8 @@ def run_comparisons(cases: list[dict]) -> list[dict]:
 
         config = {key: value for key, value in case.items() if key != "name"}
         result = run_case(config)
-        summaries.append(summarize_case_result(case["name"], result))
+        summary = summarize_case_result(case["name"], result)
+        summary.update(_build_external_signal_comparison_metadata(case))
+        summaries.append(summary)
 
     return summaries
