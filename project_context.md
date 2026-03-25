@@ -9,15 +9,17 @@
 
 - `simulate`: `returns`、`entry_signals`、`exit_signals` を受けて損益推移を計算する最小コア
 - comparison / real data pipeline: OHLCV から returns を作り、strategy ごとの差分を比較する導線
+- evaluation runners: 単一 case 実行と複数 case 実行を行う外側の orchestration 層
 - pseudo realtime replay / live decision runner: OHLCV 系データを逐次評価する外側レイヤ
 - external signal inputs: SNS / News を正規化済みシグナルとして受け取り、保存と観測までを行う層
 - integrated observer: 保存済み external signal summary を横断して読む読み取り専用層
+- result artifacts: 評価結果を表形式で保存し、後分析へ渡すための出力層
 
 ## Data Flow
 
 ### Trading path
 
-`OHLCV -> returns -> signals -> simulate -> comparison / replay / live decision`
+`OHLCV -> returns -> signals -> simulate -> comparison / evaluation / replay / live decision`
 
 ### External signal path
 
@@ -48,12 +50,14 @@ external signal 基盤は、`simulate` に直結しない前提で維持して�
 ## Invariants
 
 - `simulate` は外部 API の raw データや external signal の raw 入力を直接受けない
+- `simulate` と comparison は、実行 orchestration や永続化の責務を持たない
 - external signal の raw payload は保存しない
 - collector / adapter / normalize / save / observe の責務分離を崩さない
 - source 固有差分は adapter と `source_specific` へ寄せ、共通 schema に無理に押し込まない
 - integrated observer は共通 summary 項目と `source_specific` の有無だけに依存する
 - 互換維持のために source 固有項目がトップレベルに残っていても、observer 側の新規依存先にしない
 - テストは外部ネットワークへ依存せず、固定 payload と関数差し替えで確認する
+- 市場データの再利用と評価結果の保存は、ロジック本体とは分離した外側レイヤで扱う
 
 ## Summary Schema Boundary
 
@@ -98,6 +102,8 @@ external signal 周辺テストの考え方:
 
 ## Near-term Extension Areas
 
+- 評価結果保存の改善
+- 大量ケース実行の orchestration 改善
 - external signal の feature 化レイヤ追加
 - simulate へ外部シグナルを統合する前段処理
 - cross-source dedup
@@ -108,6 +114,7 @@ external signal 周辺テストの考え方:
 ## Do Not Break
 
 - `simulate` の入力境界
+- comparison / orchestration / 保存の責務分離
 - external signal の raw 非保存方針
 - integrated observer の「共通項目のみ依存」
 - `source_specific` を使った source 差分の隔離
@@ -120,15 +127,10 @@ external signal 周辺テストの考え方:
 - 事実:
   - 現在は、market data reuse 導線、単一 case runner、複数 period × 複数 case batch runner までが実装済みの段階である
   - batch runner は `1 period × 1 case = 1 row` で CSV を出力し、最小 JSON summary も返す
-  - 直近で行っていたことは、次の正式タスク 2 件だけにスコープを絞った実装・実行計画の整理である
-  - 正式タスクは「1. 今の runner で本当に大量ケースを回せるようにする」「2. 結果テーブルだけ DB 化する」の 2 件に限定されている
 - 方針:
-  - 目的に対する現在位置は「最小 batch runner は動くが、大量ケースを安全に流す実行入口と、結果 DB 保存はまだ未実装」という段階である
-  - 次の実作業は、未定義タスクを増やさず、上記 2 件だけに集中する
-- 推測:
-  - 推測として、次のセッションでは batch runner を period 単位 / case チャンク単位の逐次処理へ寄せ、結果保存を DB 主体に切り替えるのが自然である
+  - 現在進行中の公式タスク、実行計画、リスク、未確定事項の主記録場所は `task.md` とする
 
-### 現在の構造・前提（確定事項）
+### 構造・前提の引継ぎ
 
 - 事実:
   - `simulate` は純粋関数であり、`returns`、`entry_signals`、`exit_signals` を受ける
@@ -144,82 +146,6 @@ external signal 周辺テストの考え方:
 - 制約:
   - comparison / simulate の責務を増やしてはいけない
   - runtime truth と market data reuse の既存方針を崩してはいけない
-  - OHLCV artifact と market data shared truth の全面再設計は今回の正式タスク外である
-  - 今回 DB 化するのは結果だけである
+  - 結果保存の改善を行っても、OHLCV artifact と market data shared truth の全面再設計には踏み込まない
   - `period × case` の全件を一括でメモリ展開してはいけない
   - 一度にメモリへ載せる単位を明示し、結果は逐次保存する必要がある
-
-### 進行中の内容
-
-- 事実:
-  - 進行中の内容は、正式タスク 2 件についての実装・実行計画整理までであり、まだ実装には着手していない
-  - ステップ1は「今の runner で大量ケースを回せるようにする」ことで、period ごとの market data 解決と returns 共有は維持しつつ、全件メモリ展開を避ける実行入口が必要である
-  - ステップ2は「結果テーブルだけ DB 化する」ことで、run 単位メタ情報と `1 period × 1 case` 結果行を SQLite へ逐次保存する想定である
-- 完了:
-  - 完了しているのは計画整理までである
-- 次にやる予定:
-  - 次はステップ1の実装として、batch 実行の入力展開と保存を period 単位 / case チャンク単位へ寄せる
-  - その後にステップ2として、結果 DB を追加し、CSV と DB の関係を整理する
-
-### 重要な整理事項
-
-- 事実:
-  - 最近整理された最重要ポイントは「正式タスクを 2 件に限定し、それ以外を勝手にタスク化しない」方針である
-  - `evaluation_runner` は単発 runner として残すが、大量実行では market data 解決まで含めて period × case 回数だけ呼ばない前提である
-  - 大量実行では `evaluation_runner` から切り出した case 実行 helper だけを再利用する想定である
-  - returns は同一 period 内で 1 回だけ生成し、case ごとに再生成しない
-  - batch CSV の必須カラムには `returns_count` と `price_basis` を含める前提で整理済みである
-- 注意点:
-  - 誤解されやすい点として、今の batch runner が「動く」ことと、「大量ケースを安全に回せる」ことは別である
-  - もう 1 つの注意点として、今回 DB 化の対象は結果だけであり、OHLCV artifact や market data shared truth を DB へ寄せる話ではない
-- 不明:
-  - 不明な点は、最終的に CSV を副出力として残すか、DB 主体に切り替えるかの細部実装順である
-
-### スコープ管理
-
-- 今やること:
-  - 正式タスク 1: runner を大量ケース向けに寄せる
-  - 正式タスク 2: 結果テーブルだけ DB 化する
-  - period ごとに market data を 1 回だけ解決し、returns を 1 回だけ生成する構造を守る
-  - 結果を逐次保存し、途中失敗でも途中成果を残す
-- 今はやらないこと:
-  - OHLCV artifact の全面 DB 化
-  - market data shared truth の再設計
-  - research_manifest との全面統合
-  - 並列化の本格導入
-  - acquisition key 同時実行制御の完成
-  - schema_version 運用ルールの完成
-  - 戦略改善
-  - パラメータ最適化
-
-### 次セッションでのタスク候補
-
-- 最も自然に進む次の作業:
-  - ステップ1として、全件一括メモリ展開を避ける batch 実行入口を実装する
-  - 具体的には、period を逐次処理し、period 内 case をチャンクで流し、結果を逐次保存する
-- 他に考えられる選択肢:
-  - ステップ2を先に着手して結果 DB だけを先に作る選択肢はある
-- 推測:
-  - 推測として、先にステップ1を実装して保存単位を安定させてから、ステップ2で DB を主保存へ切り替える方が変更範囲を抑えやすい
-
-### 未確定事項 / 論点
-
-- 未確定:
-  - 一度にメモリへ載せる case チャンクサイズを固定値にするか設定値にするかは未確定である
-  - CSV を主保存に残すか、DB を主保存にして CSV を副出力にするかの最終方針は未確定である
-  - result テーブルの一意性を `run_id + period_id + case_name` にするか、別の case 識別子を導入するかは未確定である
-- 論点:
-  - batch 実行の入力を `periods.csv + cases/grids` へどこまで自然接続させるか
-  - 再実行時に新しい `run_id` で積み増すだけにするか、部分再開を考慮するか
-
-### リスク / 懸念
-
-- 事実:
-  - 大量ケースを流す段階では、全件を先に巨大配列化するとメモリ制約を破る可能性がある
-  - 今の batch runner は小中規模の逐次実行には使えるが、正式に「大量ケース向け」と言い切るには入力展開と逐次保存の強化が必要である
-- 懸念:
-  - orchestration が肥大化すると責務が崩れやすい
-  - DB と CSV の二重保存が複雑化すると保守が重くなる
-  - 再実行時の run 管理を曖昧にすると分析結果の切り分けが難しくなる
-- 推測:
-  - 推測として、period 単位 + case チャンク単位へ処理粒度を固定すれば、メモリ制約と途中保存の両立はしやすい
