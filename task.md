@@ -2,20 +2,20 @@
 
 ## Current Official Task
 
-1. medium actual run の実行計画と実行
+1. operational pilot full actual run
 
 ## Goal
 
-- medium actual run を再現可能な形で実行し、CSV / DB / run メタ / artifact / reuse 挙動を確認する
+- operational pilot full actual run を再現可能な形で実行し、CSV / DB / run メタ / artifact / cross-run reuse 挙動を確認する
 - 外部通信 run の承認と記録ルールに沿って、実行条件・通信先・保存範囲・failure 分類を task.md に残す
-- 次の actual run 判断に向けて、medium の結果を current-stack scale 定義に結び付ける
+- 次の actual run 判断に向けて、operational pilot full の結果を current-stack scale 定義に結び付ける
 
 ## In Scope
 
-- medium actual run を `config/evaluation_batch_operational.medium.json` で実行する
-- 実行結果の CSV / DB 整合、run メタ、artifact 生成、period 単位 reuse を確認する
+- operational pilot full actual run を `config/evaluation_batch_operational.pilot_full.actual.json` で実行する
+- 実行結果の CSV / DB 整合、run メタ、artifact 生成、cross-run reuse を確認する
 - 通信先、取得方式、実行条件変更、保存先、failure 分類、run_id を具体記録として残す
-- 次の actual run 候補を medium 結果に基づいて整理する
+- 次の actual run 候補を operational pilot full の結果に基づいて整理する
 
 ## Out of Scope
 
@@ -36,16 +36,16 @@
 - case 準備も含めて全件一括メモリ展開しない
 - case_name の一意性を入力展開側で保証する
 - 結果は CSV / DB に逐次保存し、途中成果を失わない
-- 今回 actual run の対象は medium だけに限定する
-- operational pilot full 以降の actual run は行わない
+- 今回 actual run の対象は operational pilot full だけに限定する
+- current-stack planning 以降の actual run は行わない
 - 外部通信 actual run は事前承認済みコマンドだけを使う
 
 ## Current Plan
 
-- `config/evaluation_batch_operational.medium.json` を actual run 用に切り替えて medium を 1 回だけ実行する
-- 実行後に CSV / DB / run メタ / artifact / fetched/reused を確認する
+- `config/evaluation_batch_operational.pilot_full.actual.json` を actual run 用 config として使い、pilot full を 1 回だけ実行する
+- 実行後に CSV / DB / run メタ / artifact / cross-run reuse を確認する
 - task.md に実行コマンド、run_id、通信先、保存先、failure 分類、結果件数を残す
-- 次の actual run 候補を medium の結果に基づいて絞る
+- 次の actual run 候補を operational pilot full の結果に基づいて絞る
 
 ## Open Questions
 
@@ -108,6 +108,15 @@
 - 同一 period 配下の 12 case は同一 artifact path を共有しており、period 単位で 1 回解決した market data を case 群へ再利用している
 - medium actual run では network 制約由来の failure は発生せず、通信先は `https://api.binance.com/api/v3/klines`、取得方式は公開 JSON の HTTP GET だった
 - medium actual run の開始から終了までは約 1.34 秒で、132 row 規模では current runner の実行感触は軽い
+- operational pilot full actual run 用に `config/evaluation_batch_operational.pilot_full.actual.json` を追加し、dry run 用 config と actual run 用 config を分離した
+- operational pilot full actual run を `python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_operational.pilot_full.actual.json` で実行した
+- operational pilot full actual run は `run_id=20260325T074029Z_f26bed88`、`run_status=completed`、`planned_rows=528`、`total_rows=528`、`succeeded_rows=528`、`failed_rows=0` だった
+- operational pilot full の CSV は `var/evaluation_batch/operational_pilot_full_results.csv`、SQLite は `var/evaluation_batch/operational_pilot_full_results.sqlite3` で、ともに 528 row を保持し、run メタも `planned_rows=528`、`succeeded_rows=528`、`failed_rows=0` で一致した
+- operational pilot full run では 11 period すべてで 48 row ずつ生成され、artifact path は 11 個で period ごとに 1 個だった
+- operational pilot full run の result row では `reused_existing_artifact=True` が 528 row、`fetched=True` が 0 row で記録され、medium run で生成済みの market data cache を cross-run reuse したことを確認した
+- medium と operational pilot full は 11 shared periods すべてで artifact path が一致し、same artifact path count は 11 / 11 だった
+- operational pilot full actual run では network 制約由来の failure は発生せず、通信先は `https://api.binance.com/api/v3/klines`、取得方式は公開 JSON の HTTP GET だった
+- operational pilot full actual run の開始から終了までは約 0.97 秒で、528 row 規模でも cross-run reuse が効く場合の実行感触は軽い
 
 ## Network Run Recording
 
@@ -132,6 +141,11 @@
   - 取得方式は公開 JSON の HTTP GET で、Codex から確認できた承認事実は「escalated 実行としてコマンドが実行できた」までで、承認 UI の内訳は不明である
   - 保存先は `var/evaluation_batch/medium_results.csv`、`var/evaluation_batch/medium_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
   - raw body 保存は行っておらず、failure 分類は今回の medium actual run では該当なし、run status は `completed` である
+  - operational pilot full actual run では `python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_operational.pilot_full.actual.json` を `sandbox_permissions=require_escalated` で実行した
+  - operational pilot full actual run の config path は `config/evaluation_batch_operational.pilot_full.actual.json`、run_id は `20260325T074029Z_f26bed88`、通信先は `https://api.binance.com/api/v3/klines`、domain は `api.binance.com` である
+  - 取得方式は公開 JSON の HTTP GET で、Codex から確認できた承認事実は「escalated 実行としてコマンドが実行できた」までで、承認 UI の内訳は不明である
+  - 保存先は `var/evaluation_batch/operational_pilot_full_results.csv`、`var/evaluation_batch/operational_pilot_full_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
+  - raw body 保存は行っておらず、failure 分類は今回の operational pilot full actual run では該当なし、run status は `completed` である
 
 ## Scale Definition
 
@@ -217,10 +231,10 @@
 
 ## Next Candidate Tasks
 
-- medium actual run の結果を確認し、operational pilot full に進むかを判断する
+- operational pilot full actual run の結果を確認し、current-stack planning actual run に進むかを判断する
 - current-stack planning / ceiling と original planning baseline / ceiling baseline のどこまでを今後 runnable 化するかを別タスクで判断する
 - 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- medium actual run の結果確認後、operational pilot full に進むかを承認待ちにする
+- operational pilot full actual run の結果確認後、current-stack planning actual run に進むかを承認待ちにする
