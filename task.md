@@ -43,11 +43,14 @@
 - full config で dry run を行い、planned_rows と case 上限の効き方を確認する
 - subset config で小規模実データ run を行い、CSV / DB 整合と run 集計を確認する
 - 実行コマンドと確認結果を README / task に記録する
+- 小規模実データ run の再実行時に何が変わったかを事実ベースで整理する
+- current initial input を前提に full planned_rows を算出し、small / medium / full の定義案を置く
 
 ## Open Questions
 
 - 初版 input の次にどの粒度で period と grids を拡張するか
 - 部分再開を後続タスクで扱うか、run 単位積み増しを原則に固定するか
+- medium 規模を `period_limit=2, case_limit=4` で固定するか、`period_limit=2, case_limit=6` まで広げるか
 
 ## Risks
 
@@ -68,6 +71,12 @@
 - 小規模実データ run を `config/evaluation_batch_initial.small.json` で実行し、`run_id=20260325T053230Z_37b9bbef`、`total_rows=3`、`succeeded_rows=3`、`failed_rows=0` を確認した
 - 小規模 run の CSV と DB は latest run でともに 3 row となり、artifact path 一致、status 全件 completed を確認した
 - 実データ run では `var/cache/market_data/ohlcv/binance_spot/btcusdt/73421dc6d7c2facf48c5eecb88262e590cfe79e8b0a1eedeff33e789e7edaecb.csv` が生成され、market data fetch が成功した
+- sandbox 内の最初の small run は DNS 名前解決失敗で `MarketDataFetchError` となり、CSV / DB には failed row が保存された
+- 同じ small run コマンドを通信許可付きで再実行すると `completed` になり、コード変更なしで market data fetch が成功した
+- current initial input の full 規模は `periods=4`、`cases=8`、`planned_rows=32`、`case_chunk_size=4`、`1 period あたり 2 chunk` である
+- 定義案として、small は `period_limit=1, case_limit=3, planned_rows=3, chunks=2`、medium は `period_limit=2, case_limit=4, planned_rows=8, chunks=4`、full は `period_limit=null, case_limit=null, planned_rows=32, chunks=8` を置く
+- dry run -> small -> medium -> full の順で進め、small と medium の各完了後に停止判断を入れる方針を置く
+- 出力先は `var/evaluation_batch/<scale>_*.csv|sqlite3` の scale 別ファイルで分離し、SQLite では `run_id` で run を追跡する方針を置く
 
 ## Not Yet Implemented
 
@@ -78,9 +87,9 @@
 
 ## Next Candidate Tasks
 
-- 初版 input を基に中規模 subset と本実行前設定を確認する
+- 初版 input を基に medium 実行を行うかどうか承認を取り、必要なら `period_limit=2, case_limit=4` 前提で確認する
 - 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- 初版実験 input、dry run、小規模実データ run、README / task 更新の結果を確認したうえで承認待ちに入る
+- ネットワーク再実行の事実確認、full planned_rows 算出、small / medium / full 定義案、出力先運用方針を確認したうえで、medium 実行可否の承認待ちに入る
