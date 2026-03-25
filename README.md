@@ -229,6 +229,12 @@ dry run 用 config は [original_planning_minimal_tradability.dry_run.json](/hom
 
 同日の actual run は `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_minimal_tradability.actual.json` で実行し、latest run は `run_id=20260325T183155Z_f4c390a1`、`planned_rows=24300`、`total_rows=24300`、`succeeded_rows=24300`、`failed_rows=0` でした。CSV は `var/evaluation_batch/original_planning_minimal_tradability_results.csv`、SQLite は `var/evaluation_batch/original_planning_minimal_tradability_results.sqlite3` です。latest run の row 数は CSV / DB ともに 24300 で一致し、artifact path は 12 個、`reused_existing_artifact=True = 24300`、`fetched=True = 0` でした。signal-only 900-row run と shared window は 12 / 12 で、artifact path も 12 / 12 で一致しました。
 
+original planning baseline の次段として、merged periods 12 × extended 18225 = 218700 rows も実行しています。template は [original_planning_extended.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_extended.case_templates.json) 、grid は [original_planning_extended.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_extended.grids.csv) です。minimal tradability の 6 軸に加えて、`price_spike_limit = 0.03 / 0.05 / 0.07` と `volume_multiplier = 1.0 / 1.5 / 2.0` を追加し、`2025 × 3 × 3 = 18225 cases / period` としています。
+
+dry run 用 config は [original_planning_extended.dry_run.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_extended.dry_run.json) 、actual run 用 config は [original_planning_extended.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_extended.actual.json) です。2026-03-26 の dry run では `total_periods=12`、`total_cases=18225`、`planned_rows=218700`、`case_chunk_size=225` を確認しました。
+
+同日の actual run は `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_extended.actual.json` で実行し、latest run は `run_id=20260325T183929Z_62c407b6`、`planned_rows=218700`、`total_rows=218700`、`succeeded_rows=218700`、`failed_rows=0` でした。CSV は `var/evaluation_batch/original_planning_extended_results.csv`、SQLite は `var/evaluation_batch/original_planning_extended_results.sqlite3` です。latest run の row 数は CSV / DB ともに 218700 で一致し、artifact path は 12 個、`reused_existing_artifact=True = 218700`、`fetched=True = 0` でした。minimal 24300-row run と shared window は 12 / 12、artifact path も 12 / 12 で一致しました。
+
 ## 手動確認
 
 `python3 scripts/run_simulation.py --config config/simulation.example.json` を実行し、出力 JSON の以下を確認します。
