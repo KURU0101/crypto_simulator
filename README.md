@@ -223,6 +223,12 @@ dry run 用 config は [original_planning_signal_only.dry_run.json](/home/kuru01
 
 この original planning signal-only 実行の前には、`run_id=20260325T181438Z_51157164` の failed run が DB に残っています。原因は `matching_signal_count` が当時の許容 consumption series に含まれていなかったことと、case prepare 例外時の batch runner 例外経路不備でした。これは superseded failed run record であり、latest completed run の partial 残留ではありません。CSV は latest run の内容で再生成され、SQLite では run_id 単位で両 run を追跡します。
 
+original planning baseline の次段は merged periods 12 × minimal tradability 2025 = 24300 rows です。template は [original_planning_minimal_tradability.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_minimal_tradability.case_templates.json) 、grid は [original_planning_minimal_tradability.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_minimal_tradability.grids.csv) に定義しています。signal-only の 3 軸は維持しつつ、`take_profit`、`stop_loss`、`max_hold_minutes` を low / mid / high の 3 値ずつ追加し、`75 × 3 × 3 × 3 = 2025 cases / period` とします。今回の刻みは `take_profit = 0.02 / 0.04 / 0.06`、`stop_loss = -0.01 / -0.02 / -0.03`、`max_hold_minutes = 720 / 1440 / 2880` です。
+
+dry run 用 config は [original_planning_minimal_tradability.dry_run.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_minimal_tradability.dry_run.json) 、actual run 用 config は [original_planning_minimal_tradability.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_minimal_tradability.actual.json) です。2026-03-26 の dry run では `total_periods=12`、`total_cases=2025`、`planned_rows=24300`、`case_chunk_size=75` を確認しました。
+
+同日の actual run は `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_minimal_tradability.actual.json` で実行し、latest run は `run_id=20260325T183155Z_f4c390a1`、`planned_rows=24300`、`total_rows=24300`、`succeeded_rows=24300`、`failed_rows=0` でした。CSV は `var/evaluation_batch/original_planning_minimal_tradability_results.csv`、SQLite は `var/evaluation_batch/original_planning_minimal_tradability_results.sqlite3` です。latest run の row 数は CSV / DB ともに 24300 で一致し、artifact path は 12 個、`reused_existing_artifact=True = 24300`、`fetched=True = 0` でした。signal-only 900-row run と shared window は 12 / 12 で、artifact path も 12 / 12 で一致しました。
+
 ## 手動確認
 
 `python3 scripts/run_simulation.py --config config/simulation.example.json` を実行し、出力 JSON の以下を確認します。

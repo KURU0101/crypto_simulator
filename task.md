@@ -2,25 +2,24 @@
 
 ## Current Official Task
 
-1. original planning baseline 側の最初の actual run
+1. original planning baseline: merged 12 × minimal tradability actual run
 
 ## Goal
 
-- original planning baseline の最初の actual run として、merged periods 12 × signal-only 75 = 900 rows を実施する
-- raw candidate 24 と merged 12 の対応関係、および signal-only 75 の軸 × 刻み方を再利用可能な形で残す
+- original planning baseline の次段として、merged periods 12 × minimal tradability 2025 = 24300 rows を実施する
+- signal-only 75 を維持したまま、`take_profit`、`stop_loss`、`max_hold_minutes` の 3 軸を low / mid / high で追加する
 - dry run と actual run の結果を README / task に記録し、次の original 系 run へ進む判断材料を整える
 
 ## In Scope
 
-- original planning baseline 用の raw 24 / merged 12 period 定義を config 配下へ追加する
-- signal-only 75 cases / period の template / grid / config を original 系命名で追加する
-- dry run で `total_periods=12`、`total_cases=75`、`planned_rows=900` を確認し、問題なければ actual run を 1 回だけ行う
+- merged periods 12 は前回定義をそのまま使う
+- minimal tradability 用の template / grid / config を original 系命名で追加する
+- dry run で `total_periods=12`、`total_cases=2025`、`planned_rows=24300` を確認し、問題なければ actual run を 1 回だけ行う
 - CSV / DB / run メタ / artifact / reuse / fetch / failure 分類を確認し、README / task に反映する
 
 ## Out of Scope
 
 - raw candidate periods 24 を使う actual run
-- minimal tradability の actual run
 - extended の actual run
 - original planning baseline / ceiling baseline の larger run
 - 並列化の本格導入
@@ -42,19 +41,19 @@
 - 外部通信 actual run として、通信先 / 取得方式 / 保存範囲 / failure 分類 / 承認経路の観測可能範囲 / run_id を残す
 - dry_run 用 config と actual run 用 config は分ける
 - output_csv_path / results_db_path は current-stack の official scale と共有しない
-- dry run が `planned_rows=900` にならない場合は actual run しない
+- dry run が `planned_rows=24300` にならない場合は actual run しない
 - 既存の run 記録は run_id 単位で保持し、superseded completed run と partial run を混同しない
 
 ## Current Plan
 
-- original planning baseline 用の merged periods 12 を raw 24 からの対応付きで具体化する
-- signal-only 75 cases / period の template / grid / config を original 系命名で作る
-- dry run で `12 periods × 75 cases = 900 rows` を確認し、成立した場合のみ actual run を 1 回行う
-- README / task に merged 12 定義、raw 24 との対応、signal-only 75 の軸 × 刻み方、dry run 結果、actual run 結果、reuse / fetch 内訳を追記する
+- merged periods 12 は前回定義をそのまま使う
+- minimal tradability 2025 cases / period の template / grid / config を original 系命名で作る
+- dry run で `12 periods × 2025 cases = 24300 rows` を確認し、成立した場合のみ actual run を 1 回行う
+- README / task に minimal tradability の追加 3 軸、dry run 結果、actual run 結果、reuse / fetch 内訳を追記する
 
 ## Open Questions
 
-- original planning baseline の次段を minimal tradability にするか、raw periods × signal-only にするか
+- original planning baseline の次段を raw periods × signal-only にするか、extended へ進むか
 - original planning baseline でも merged period の定義を今後固定するか、候補差し替え余地を残すか
 - original 系 run の次段で fresh fetch 比率をどの程度重視するか
 
@@ -159,6 +158,15 @@
 - latest original planning signal-only run の row 内訳は `reused_existing_artifact=True = 225`、`fetched=True = 675` で、current-stack ceiling と window が一致する 3 merged periods は cross-run reuse、残り 9 periods は fresh fetch だった
 - original planning signal-only latest run では network 制約由来の failure は発生せず、通信先は `https://api.binance.com/api/v3/klines`、取得方式は公開 JSON の HTTP GET だった
 - original planning signal-only latest run の開始から終了までは約 2.15 秒で、900 row 規模でも reuse と fresh fetch が混在したまま完走した
+- original planning minimal tradability 用に `config/original_planning_minimal_tradability.case_templates.json`、`config/original_planning_minimal_tradability.grids.csv`、`config/original_planning_minimal_tradability.dry_run.json`、`config/original_planning_minimal_tradability.actual.json` を追加した
+- minimal tradability は signal-only の 3 軸を維持したまま、`take_profit = 0.02 / 0.04 / 0.06`、`stop_loss = -0.01 / -0.02 / -0.03`、`max_hold_minutes = 720 / 1440 / 2880` を追加し、`75 × 3 × 3 × 3 = 2025 cases / period` とした
+- `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_minimal_tradability.dry_run.json` を実行し、`total_periods=12`、`total_cases=2025`、`planned_rows=24300`、`case_chunk_size=75` を確認した
+- `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_minimal_tradability.actual.json` を実行し、latest run `run_id=20260325T183155Z_f4c390a1`、`planned_rows=24300`、`total_rows=24300`、`succeeded_rows=24300`、`failed_rows=0` を確認した
+- latest original planning minimal tradability run の CSV は `var/evaluation_batch/original_planning_minimal_tradability_results.csv`、SQLite は `var/evaluation_batch/original_planning_minimal_tradability_results.sqlite3` で、ともに 24300 row を保持し、run メタも `planned_rows=24300`、`succeeded_rows=24300`、`failed_rows=0` で一致した
+- latest original planning minimal tradability run では 12 period すべてで 2025 row ずつ生成され、artifact path は 12 個で period ごとに 1 個だった
+- latest original planning minimal tradability run の row 内訳は `reused_existing_artifact=True = 24300`、`fetched=True = 0` で、signal-only 900-row run と shared window 12 / 12、same artifact path 12 / 12 を確認した
+- original planning minimal tradability latest run では network 制約由来の failure は発生せず、通信先は `https://api.binance.com/api/v3/klines`、取得方式は公開 JSON の HTTP GET だった
+- original planning minimal tradability latest run の開始から終了までは約 25.98 秒で、24300 row 規模の cache-backed execution validation を完了した
 
 ## Original Planning Baseline Run
 
@@ -190,6 +198,29 @@
   - run_id: `20260325T181438Z_51157164`
   - 種別: latest run の partial 残留ではなく、修正前実装による superseded failed run record
   - 原因: `matching_signal_count` 未許容と、case prepare 失敗時の例外経路不備
+
+## Original Planning Minimal Tradability Run
+
+- periods:
+  - merged periods 12 は `config/original_planning_baseline.merged_periods.csv` をそのまま使う
+- minimal tradability 2025:
+  - signal-only の 3 軸は前回と同一
+  - 追加軸は `take_profit`、`stop_loss`、`max_hold_minutes` の 3 つだけ
+  - 刻みは `take_profit = 0.02 / 0.04 / 0.06`、`stop_loss = -0.01 / -0.02 / -0.03`、`max_hold_minutes = 720 / 1440 / 2880`
+  - 上記により `5 × 5 × 3 × 3 × 3 × 3 = 2025 cases / period`
+- dry run:
+  - config: `config/original_planning_minimal_tradability.dry_run.json`
+  - 結果: `total_periods=12`、`total_cases=2025`、`planned_rows=24300`、`case_chunk_size=75`
+- actual run:
+  - config: `config/original_planning_minimal_tradability.actual.json`
+  - latest run_id: `20260325T183155Z_f4c390a1`
+  - status: `completed`
+  - `planned_rows=24300`、`total_rows=24300`、`succeeded_rows=24300`、`failed_rows=0`
+  - 保存先: `var/evaluation_batch/original_planning_minimal_tradability_results.csv`、`var/evaluation_batch/original_planning_minimal_tradability_results.sqlite3`
+- reuse / fetch:
+  - `reused_existing_artifact=True = 24300`
+  - `fetched=True = 0`
+  - signal-only 900-row run と shared window 12 / 12、artifact path 一致 12 / 12
 
 ## Network Run Recording
 
@@ -236,6 +267,12 @@
   - 保存先は `var/evaluation_batch/original_planning_signal_only_results.csv`、`var/evaluation_batch/original_planning_signal_only_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
   - raw body 保存は行っておらず、latest run の failure 分類は該当なし、run status は `completed` である
   - 先行 failed run `20260325T181438Z_51157164` は implementation mismatch で、`matching_signal_count` 未許容と例外経路不備が原因だった
+  - original planning minimal tradability dry run では `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_minimal_tradability.dry_run.json` を実行し、`total_periods=12`、`total_cases=2025`、`planned_rows=24300` を確認した
+  - original planning minimal tradability actual run では `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_minimal_tradability.actual.json` を `sandbox_permissions=require_escalated` で実行した
+  - original planning minimal tradability actual run の latest config path は `config/original_planning_minimal_tradability.actual.json`、latest run_id は `20260325T183155Z_f4c390a1`、通信先は `https://api.binance.com/api/v3/klines`、domain は `api.binance.com` である
+  - 取得方式は公開 JSON の HTTP GET で、Codex から確認できた承認事実は「escalated 実行としてコマンドが実行できた」までで、承認 UI の内訳は不明である
+  - 保存先は `var/evaluation_batch/original_planning_minimal_tradability_results.csv`、`var/evaluation_batch/original_planning_minimal_tradability_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
+  - raw body 保存は行っておらず、latest run の failure 分類は該当なし、run status は `completed` である
 
 ## Official Scale Definition
 
@@ -312,10 +349,10 @@
 
 ## Next Candidate Tasks
 
-- original planning baseline の次段として、raw 24 × signal-only へ広げるか、merged 12 × minimal tradability へ進むかを判断する
+- original planning baseline の次段として、raw 24 × signal-only へ広げるか、merged 12 × extended へ進むかを判断する
 - original planning baseline の merged 12 定義をこのまま固定するか、後続候補入れ替え余地を残すかを判断する
 - 必要なら external-signal summary root の複数系統対応を再評価する
 
 ## Next Approval Gate
 
-- original planning baseline 側の最初の actual run 結果を確認したうえで、次に raw 24 × signal-only へ進むか、merged 12 × minimal tradability へ進むかの承認待ちにする
+- original planning baseline の minimal tradability actual run 結果を確認したうえで、次に raw 24 × signal-only へ進むか、merged 12 × extended へ進むかの承認待ちにする
