@@ -2,21 +2,21 @@
 
 ## Current Official Task
 
-1. current-stack planning actual run
+1. current-stack ceiling actual run
 
 ## Goal
 
-- current-stack planning actual run を再現可能な形で実行し、CSV / DB / run メタ / artifact / cross-run reuse 挙動を確認する
+- current-stack ceiling actual run を再現可能な形で実行し、CSV / DB / run メタ / artifact / cross-run reuse 挙動を確認する
 - 外部通信 run の承認と記録ルールに沿って、実行条件・通信先・保存範囲・failure 分類を task.md に残す
-- 次の actual run 判断に向けて、current-stack planning の結果を current-stack scale 定義に結び付ける
+- 次の actual run 判断に向けて、current-stack ceiling の結果を current-stack scale 定義に結び付ける
 
 ## In Scope
 
-- current-stack planning actual run を `config/evaluation_batch_operational.planning.actual.json` で実行する
+- current-stack ceiling actual run を `config/evaluation_batch_operational.ceiling.actual.json` で実行する
 - 実行結果の CSV / DB 整合、run メタ、artifact 生成、cross-run reuse を確認する
 - 通信先、取得方式、実行条件変更、保存先、failure 分類、run_id を具体記録として残す
 - partial run 残留がないことを確認する
-- 次の actual run 候補を current-stack planning の結果に基づいて整理する
+- 次の actual run 候補を current-stack ceiling の結果に基づいて整理する
 
 ## Out of Scope
 
@@ -37,16 +37,16 @@
 - case 準備も含めて全件一括メモリ展開しない
 - case_name の一意性を入力展開側で保証する
 - 結果は CSV / DB に逐次保存し、途中成果を失わない
-- 今回 actual run の対象は current-stack planning だけに限定する
-- current-stack ceiling 以降の actual run は行わない
+- 今回 actual run の対象は current-stack ceiling だけに限定する
+- original planning baseline / ceiling baseline の actual run は行わない
 - 外部通信 actual run は事前承認済みコマンドだけを使う
 
 ## Current Plan
 
-- `config/evaluation_batch_operational.planning.actual.json` を actual run 用 config として使い、planning を 1 回だけ実行する
-- 実行後に CSV / DB / run メタ / artifact / cross-run reuse / partial run 残留を確認する
+- `config/evaluation_batch_operational.ceiling.actual.json` を actual run 用 config として使い、ceiling を 1 回だけ実行する
+- 実行後に CSV / DB / run メタ / artifact / cross-run reuse / fresh fetch / partial run 残留を確認する
 - task.md に実行コマンド、run_id、通信先、保存先、failure 分類、結果件数を残す
-- 次の actual run 候補を current-stack planning の結果に基づいて絞る
+- ceiling 完了後の official scale 名を `small / medium / full` に再整理する案を出す
 
 ## Open Questions
 
@@ -129,6 +129,17 @@
 - current-stack planning actual run の後は latest run_id が `20260325T080033Z_f58d07fc` の 1 run だけで、CSV / DB 行数は planned_rows と一致しており partial run 残留は確認されなかった
 - current-stack planning actual run では network 制約由来の failure は発生せず、通信先は `https://api.binance.com/api/v3/klines`、取得方式は公開 JSON の HTTP GET だった
 - current-stack planning actual run の開始から終了までは約 3.76 秒で、4224 row 規模でも cross-run reuse が効く場合の実行感触はまだ軽い
+- current-stack planning actual run は、4224 rows 規模の評価・保存・整合性確認と cross-run reuse 確認には成功したが、fresh fetch を伴う 4224 rows 規模の検証ではなく cache-backed execution validation だった
+- current-stack ceiling 用に `config/evaluation_batch_operational.ceiling.periods.csv`、`config/evaluation_batch_operational.ceiling.json`、`config/evaluation_batch_operational.ceiling.actual.json` を追加し、dry run 用 config と actual run 用 config を分離した
+- current-stack ceiling actual run は latest run として `python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_operational.ceiling.actual.json` を実行し、`run_id=20260325T081754Z_a3d1d089`、`run_status=completed`、`planned_rows=9216`、`total_rows=9216`、`succeeded_rows=9216`、`failed_rows=0` を確認した
+- current-stack ceiling の CSV は `var/evaluation_batch/current_stack_ceiling_results.csv`、SQLite は `var/evaluation_batch/current_stack_ceiling_results.sqlite3` で、ともに latest run で 9216 row を保持し、run メタも `planned_rows=9216`、`succeeded_rows=9216`、`failed_rows=0` で一致した
+- current-stack ceiling latest run では 24 period すべてで 384 row ずつ生成され、artifact path は 24 個で period ごとに 1 個だった
+- current-stack ceiling latest run の result row では `reused_existing_artifact=True` が 4224 row、`fetched=True` が 4992 row で記録され、shared 11 periods は cross-run reuse、new 13 periods は fresh fetch になった
+- planning と current-stack ceiling の shared 11 periods では artifact path が 11 / 11 で一致した
+- current-stack ceiling latest run では network 制約由来の failure は発生せず、通信先は `https://api.binance.com/api/v3/klines`、取得方式は公開 JSON の HTTP GET だった
+- current-stack ceiling 用 CSV / DB は実行前には存在せず partial run 残留はなかった
+- current-stack ceiling 用 SQLite には、latest run の前に `20260325T081535Z_98fcda3c` と `20260325T081607Z_d760f224` の completed run が残っているが、いずれも中断 partial ではなく superseded completed run である
+- current-stack ceiling latest run の開始から終了までは約 8.65 秒で、9216 row 規模でも reuse 4224 / fetch 4992 の混在で完走した
 
 ## Network Run Recording
 
@@ -163,6 +174,11 @@
   - 取得方式は公開 JSON の HTTP GET で、Codex から確認できた承認事実は「escalated 実行としてコマンドが実行できた」までで、承認 UI の内訳は不明である
   - 保存先は `var/evaluation_batch/current_stack_planning_results.csv`、`var/evaluation_batch/current_stack_planning_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
   - raw body 保存は行っておらず、failure 分類は今回の current-stack planning actual run では該当なし、run status は `completed` である
+  - current-stack ceiling actual run では `python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_operational.ceiling.actual.json` を `sandbox_permissions=require_escalated` で実行した
+  - current-stack ceiling actual run の latest config path は `config/evaluation_batch_operational.ceiling.actual.json`、latest run_id は `20260325T081754Z_a3d1d089`、通信先は `https://api.binance.com/api/v3/klines`、domain は `api.binance.com` である
+  - 取得方式は公開 JSON の HTTP GET で、Codex から確認できた承認事実は「escalated 実行としてコマンドが実行できた」までで、承認 UI の内訳は不明である
+  - 保存先は `var/evaluation_batch/current_stack_ceiling_results.csv`、`var/evaluation_batch/current_stack_ceiling_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
+  - raw body 保存は行っておらず、failure 分類は今回の current-stack ceiling latest run では該当なし、run status は `completed` である
 
 ## Scale Definition
 
@@ -248,10 +264,10 @@
 
 ## Next Candidate Tasks
 
-- current-stack planning actual run の結果を確認し、current-stack ceiling actual run に進むかを判断する
-- current-stack planning / ceiling と original planning baseline / ceiling baseline のどこまでを今後 runnable 化するかを別タスクで判断する
+- current-stack ceiling actual run の結果を確認し、official scale 名を `small / medium / full` へ整理し直す
+- original planning baseline / ceiling baseline を actual run するかどうかは別タスクで判断する
 - 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- current-stack planning actual run の結果確認後、current-stack ceiling actual run に進むかを承認待ちにする
+- current-stack ceiling actual run の結果確認後、official scale 名を `small / medium / full` に再整理する案の承認待ちにする
