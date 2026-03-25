@@ -2,19 +2,21 @@
 
 ## Current Official Task
 
-1. 実験入力の初版作成と、実データによる段階的実行
+1. ネットワーク再実行の事実確認と安全性整理
+2. 本来想定していた full 規模の再定義と、それに基づく small / medium / full の再設計
 
 ## Goal
 
-- 実際に使う初版の periods / case templates / grids / adapter config を作り、dry run と小規模実データ run を通して実験入口を再現可能にする
-- 既存の period 単位 market data reuse、case chunk 実行、CSV / DB 逐次保存の導線を実運用前提で確認する
+- ネットワーク再実行時の実行条件変更、通信実体、保存範囲、留保点を事実ベースで整理する
+- initial input の full ではなく、本来想定していた raw candidate periods と merged periods を前提に full 規模を再定義し、small / medium / full の基準を置く
 
 ## In Scope
 
-- 実験用の初版 periods.csv を作る
-- 実験用の初版 case_templates.json と grids.csv を作る
-- full dry run と period_limit / case_limit を使った小規模実データ run を実行する
-- CSV / DB の整合と run 集計を確認し、README / task に残す
+- ネットワーク再実行の追加確認を行う
+- raw candidate periods と merged periods の案を置く
+- signal-only / minimal tradability / extended / optional execution の grid 件数を整理する
+- raw / merged 両方に対する planned_rows と small / medium / full 定義案を置く
+- task.md に確認結果と次の承認ゲートを残す
 
 ## Out of Scope
 
@@ -35,27 +37,27 @@
 - case 準備も含めて全件一括メモリ展開しない
 - case_name の一意性を入力展開側で保証する
 - 結果は CSV / DB に逐次保存し、途中成果を失わない
-- 巨大な本実行は行わず、今回は dry run と小規模実データ run に限定する
+- medium 実行や full 実行はまだ開始しない
+- API 取得を伴う追加 run は行わない
 
 ## Current Plan
 
-- 初版実験入力として複数代表 period と既存 strategy ベースの template / grid を定義する
-- full config で dry run を行い、planned_rows と case 上限の効き方を確認する
-- subset config で小規模実データ run を行い、CSV / DB 整合と run 集計を確認する
-- 実行コマンドと確認結果を README / task に記録する
-- 小規模実データ run の再実行時に何が変わったかを事実ベースで整理する
-- current initial input を前提に full planned_rows を算出し、small / medium / full の定義案を置く
+- 小規模実データ run の 1 回目失敗と 2 回目成功の差分を事実ベースで整理する
+- raw candidate periods を 3 年分の市場インパクト候補として formalize する
+- overlap_group ベースの merged periods 案を作る
+- signal-only / minimal tradability / extended / optional execution の grid 件数を定義する
+- raw ceiling と merged operational full の両方を算出し、そのうえで small / medium / full を再定義する
 
 ## Open Questions
 
-- 初版 input の次にどの粒度で period と grids を拡張するか
+- raw candidate periods のうち 2025 系候補をどこまで残すか
 - 部分再開を後続タスクで扱うか、run 単位積み増しを原則に固定するか
-- medium 規模を `period_limit=2, case_limit=4` で固定するか、`period_limit=2, case_limit=6` まで広げるか
+- full を raw×extended の ceiling とみなすか、merged×extended の operational baseline とみなすか
 
 ## Risks
 
-- 実験 input が過剰だと小規模確認の前に実行負荷が上がる
-- 実データ取得が失敗すると run 検証が止まる
+- 既存文書に具体 event 候補一覧が残っていないため、一部は今回の提案ベースになる
+- 通信許可の承認経路は Codex から完全には観測できない
 - case_name 一意性が崩れると CSV / DB の追跡が曖昧になる
 - 中断時と再実行時の扱いが曖昧だと run 単位分析が難しくなる
 
@@ -77,6 +79,16 @@
 - 定義案として、small は `period_limit=1, case_limit=3, planned_rows=3, chunks=2`、medium は `period_limit=2, case_limit=4, planned_rows=8, chunks=4`、full は `period_limit=null, case_limit=null, planned_rows=32, chunks=8` を置く
 - dry run -> small -> medium -> full の順で進め、small と medium の各完了後に停止判断を入れる方針を置く
 - 出力先は `var/evaluation_batch/<scale>_*.csv|sqlite3` の scale 別ファイルで分離し、SQLite では `run_id` で run を追跡する方針を置く
+- 追加確認として、再実行時に変えた実行条件は `exec_command` の `sandbox_permissions=require_escalated` だけであり、コマンド文字列と config は同一だったことを整理した
+- Codex から確認できるのは「通常 sandbox では失敗し、escalated 実行では成功した」という事実までであり、承認 UI の内訳までは不明である
+- 通信先は `https://api.binance.com/api/v3/klines` の公開 JSON、HTTP GET、1 period 1 week / 1h では 169 rows だったため成功 run のリクエスト回数は 1 回と推定できる
+- 1 回目失敗時の failure row は `error_code=MarketDataFetchError`、`error_message=failed to fetch klines: [Errno -3] Temporary failure in name resolution` で、実装例外やデータ不備は混ざっていない
+- raw response body 保存は行わず、保存されたのは normalized OHLCV CSV artifact、shared state DB の取得状態、evaluation CSV、evaluation results DB である
+- 本命 full 再定義のための raw candidate periods 案は 14 件、merged periods 案は 11 件とした
+- grid 件数は signal-only 12、minimal tradability 8、extended 384、optional execution 1152 の案を置いた
+- raw periods × grid 件数は signal-only 168、minimal 112、extended 5376、optional 16128 rows である
+- merged periods × grid 件数は signal-only 132、minimal 88、extended 4224、optional 12672 rows である
+- 再定義案として、small は `period_limit=2, case_limit=6, planned_rows=12`、medium は `period_limit=6, case_limit=12, planned_rows=72`、full は merged operational `period_limit=11, case_limit=384, planned_rows=4224`、raw ceiling は `period_limit=14, case_limit=384, planned_rows=5376` とした
 
 ## Not Yet Implemented
 
@@ -87,9 +99,10 @@
 
 ## Next Candidate Tasks
 
-- 初版 input を基に medium 実行を行うかどうか承認を取り、必要なら `period_limit=2, case_limit=4` 前提で確認する
+- raw candidate periods と merged periods のどちらを本実行基準にするか承認を取る
+- medium 実行を行うかどうか承認を取り、必要なら `period_limit=6, case_limit=12` 前提で確認する
 - 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- ネットワーク再実行の事実確認、full planned_rows 算出、small / medium / full 定義案、出力先運用方針を確認したうえで、medium 実行可否の承認待ちに入る
+- ネットワーク再実行の追加確認、raw / merged periods 案、本命 full planned_rows、small / medium / full 再定義、出力先運用方針を確認したうえで、medium 実行可否の承認待ちに入る
