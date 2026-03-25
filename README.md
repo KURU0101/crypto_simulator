@@ -167,6 +167,22 @@ batch runner は CSV を維持したまま、結果 DB を追加保存先とし�
 
 CSV / DB の二重保存は run ごとに append ではなく新しい `run_id` を切る前提です。中断時はその時点までの CSV 行と DB 行を残し、再実行では既存 run を上書きせず新しい run として追跡します。部分再開や旧 run への追記ルールは未実装で、後続タスクで扱います。
 
+`case_limit` は period ごとの上限ではなく、grid から生成される全 case 数の上限です。実行時はその上限までの case 集合を period ごとに再利用します。grid は period ごとに再走査しますが、これは全 case 一括展開を避けてメモリ安全を優先するためです。
+
+初版の実験入力として [evaluation_batch_initial.periods.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.periods.csv) 、 [evaluation_batch_initial.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.case_templates.json) 、 [evaluation_batch_initial.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.grids.csv) を追加しています。full dry run は [evaluation_batch_initial.full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.full.json) 、小規模実データ run は [evaluation_batch_initial.small.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.small.json) を使います。
+
+初版 input の確認コマンド:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_initial.full.json
+python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_initial.small.json
+```
+
+2026-03-25 の確認では、full dry run は `total_periods=4`、`total_cases=8`、`planned_rows=32`、`case_chunk_size=4` でした。小規模実データ run は `period_limit=1`、`case_limit=3`、`case_chunk_size=2` で `run_id=20260325T053230Z_37b9bbef`、`total_rows=3`、`succeeded_rows=3`、`failed_rows=0` でした。小規模 run の 3 row は同一 artifact path を共有し、`fetched=True`、`reused_existing_artifact=False` を確認しています。
+
+同じ `output_csv_path` で再実行した場合、CSV はその run の内容で再生成されます。一方 SQLite は `run_id` 単位で追記されるため、同じ `results_db_path` に複数 run を保持できます。過去 run の CSV を残したい場合は `output_csv_path` を run ごとに分けます。
+
 ## 手動確認
 
 `python3 scripts/run_simulation.py --config config/simulation.example.json` を実行し、出力 JSON の以下を確認します。

@@ -2,20 +2,19 @@
 
 ## Current Official Task
 
-1. 大量ケース実行のための入力接続と段階的実行
+1. 実験入力の初版作成と、実データによる段階的実行
 
 ## Goal
 
-- periods / cases / parameter grids などの入力資産を既存 batch runner へ薄く接続し、dry run から小規模 run、本実行準備まで同じ導線で扱えるようにする
-- 既存の period 単位 market data reuse、case chunk 実行、CSV / DB 逐次保存を維持したまま、大量ケース実行の入口を整える
+- 実際に使う初版の periods / case templates / grids / adapter config を作り、dry run と小規模実データ run を通して実験入口を再現可能にする
+- 既存の period 単位 market data reuse、case chunk 実行、CSV / DB 逐次保存の導線を実運用前提で確認する
 
 ## In Scope
 
-- periods / case templates / grids を batch runner 入力へ変換する薄い adapter 層を作る
-- period 単位 + case chunk 単位の実行方針を維持する
-- case 展開時に一意な `case_name` を保証する
-- dry run、period / case subset 実行、本実行準備の導線を明確にする
-- CSV / DB 二重保存時の中断・再実行の最小運用ルールを明文化する
+- 実験用の初版 periods.csv を作る
+- 実験用の初版 case_templates.json と grids.csv を作る
+- full dry run と period_limit / case_limit を使った小規模実データ run を実行する
+- CSV / DB の整合と run 集計を確認し、README / task に残す
 
 ## Out of Scope
 
@@ -36,24 +35,24 @@
 - case 準備も含めて全件一括メモリ展開しない
 - case_name の一意性を入力展開側で保証する
 - 結果は CSV / DB に逐次保存し、途中成果を失わない
+- 巨大な本実行は行わず、今回は dry run と小規模実データ run に限定する
 
 ## Current Plan
 
-- periods CSV と case templates / grids から batch runner 入力を組み立てる adapter を追加する
-- 既存 JSON batch config 入口は維持し、新しい入力資産用の入口を別で用意する
-- grid は遅延走査し、period ごとに fresh iterator を取り直して case chunk 単位に prepare / 実行する
-- `period_limit` / `case_limit` / `dry_run` を使って小規模確認と本実行準備を分ける
-- CSV / DB の中断・再実行は「新しい run_id を発行して積み増す」前提を明文化する
+- 初版実験入力として複数代表 period と既存 strategy ベースの template / grid を定義する
+- full config で dry run を行い、planned_rows と case 上限の効き方を確認する
+- subset config で小規模実データ run を行い、CSV / DB 整合と run 集計を確認する
+- 実行コマンドと確認結果を README / task に記録する
 
 ## Open Questions
 
-- 既存 builder / manifest 資産を将来どこまで入力生成に流用するか
+- 初版 input の次にどの粒度で period と grids を拡張するか
 - 部分再開を後続タスクで扱うか、run 単位積み増しを原則に固定するか
 
 ## Risks
 
-- grids 展開を先に巨大配列化するとメモリ制約を破る
-- 入力 adapter が runner 本体へ食い込むと責務境界が崩れる
+- 実験 input が過剰だと小規模確認の前に実行負荷が上がる
+- 実データ取得が失敗すると run 検証が止まる
 - case_name 一意性が崩れると CSV / DB の追跡が曖昧になる
 - 中断時と再実行時の扱いが曖昧だと run 単位分析が難しくなる
 
@@ -61,20 +60,27 @@
 
 - step1 と step2 は完了済みとして承認された
 - period 単位 market data reuse、case chunk 実行、CSV / DB 逐次保存の batch runner 基盤は実装済み
-- 次の正式タスクとして、大量ケース実行のための入力接続と段階的実行へ切り替えた
-- 本タスクでは、periods / case templates / grids から batch runner へ接続する薄い adapter 入口を追加する
+- 大量ケース実行のための入力接続と段階的実行は完了済みとして承認された
+- 今回の正式タスクとして、初版実験 input 作成と dry run / 小規模実データ run を実施する
+- 初版実験 input として `config/evaluation_batch_initial.*` を追加した
+- `case_limit` は global case 上限であり、grid は period ごとに再走査してメモリ安全を優先する前提を README に明記した
+- full dry run を `config/evaluation_batch_initial.full.json` で実行し、`total_periods=4`、`total_cases=8`、`planned_rows=32`、`case_chunk_size=4` を確認した
+- 小規模実データ run を `config/evaluation_batch_initial.small.json` で実行し、`run_id=20260325T053230Z_37b9bbef`、`total_rows=3`、`succeeded_rows=3`、`failed_rows=0` を確認した
+- 小規模 run の CSV と DB は latest run でともに 3 row となり、artifact path 一致、status 全件 completed を確認した
+- 実データ run では `var/cache/market_data/ohlcv/binance_spot/btcusdt/73421dc6d7c2facf48c5eecb88262e590cfe79e8b0a1eedeff33e789e7edaecb.csv` が生成され、market data fetch が成功した
 
 ## Not Yet Implemented
 
 - builder / manifest の部分流用ルール
 - 部分再開方針
 - DB 主体運用への最終切替
+- 全量本実行
 
 ## Next Candidate Tasks
 
-- 実運用前に中規模 subset と本実行前設定を確認する
+- 初版 input を基に中規模 subset と本実行前設定を確認する
 - 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- 入力 adapter、dry run、小規模 run 導線、README / task 更新の実装結果を確認したうえで承認待ちに入る
+- 初版実験 input、dry run、小規模実データ run、README / task 更新の結果を確認したうえで承認待ちに入る
