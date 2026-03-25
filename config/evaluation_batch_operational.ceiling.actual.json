@@ -1,0 +1,17 @@
+{
+  "input": {
+    "periods_csv_path": "config/evaluation_batch_operational.ceiling.periods.csv",
+    "case_templates_json_path": "config/evaluation_batch_operational.case_templates.json",
+    "grids_csv_path": "config/evaluation_batch_operational.planning.grids.csv",
+    "period_limit": null,
+    "case_limit": null
+  },
+  "execution": {
+    "output_csv_path": "var/evaluation_batch/current_stack_ceiling_results.csv",
+    "results_db_path": "var/evaluation_batch/current_stack_ceiling_results.sqlite3",
+    "cache_root": "var/cache/market_data/ohlcv",
+    "shared_state_db_path": "var/cache/market_data/shared_state.sqlite3",
+    "case_chunk_size": 50,
+    "dry_run": false
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "periods": [
+    {
+      "period_id": "btc_2024q1_window_a",
+      "source": "binance_spot",
+      "symbol": "BTCUSDT",
+      "interval": "1h",
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-08T00:00:00Z"
+    },
+    {
+      "period_id": "btc_2024q1_window_b",
+      "source": "binance_spot",
+      "symbol": "BTCUSDT",
+      "interval": "1h",
+      "start": "2024-01-08T00:00:00Z",
+      "end": "2024-01-15T00:00:00Z"
+    }
+  ],
+  "cases": [
+    {
+      "name": "threshold_baseline",
+      "strategy": "threshold",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "entry_threshold": 0.01,
+      "exit_threshold": -0.01
+    },
+    {
+      "name": "threshold_with_cost",
+      "strategy": "threshold",
+      "initial_cash": 100000,
+      "fee_rate": 0.001,
+      "slippage_rate": 0.001,
+      "entry_threshold": 0.01,
+      "exit_threshold": -0.01
+    }
+  ],
+  "output_csv_path": "var/evaluation_batch/results.csv",
+  "results_db_path": "var/evaluation_batch/results.sqlite3",
+  "cache_root": "var/cache/market_data/ohlcv",
+  "shared_state_db_path": "var/cache/market_data/shared_state.sqlite3",
+  "case_chunk_size": 50,
+  "dry_run": false
+}

@@ -1,0 +1,13 @@
+{
+  "input": {
+    "periods_csv_path": "config/original_planning_baseline.merged_periods.csv",
+    "case_templates_json_path": "config/original_planning_minimal_tradability.case_templates.json",
+    "grids_csv_path": "config/original_planning_minimal_tradability.grids.csv"
+  },
+  "execution": {
+    "output_csv_path": "var/evaluation_batch/original_planning_minimal_tradability_results.csv",
+    "results_db_path": "var/evaluation_batch/original_planning_minimal_tradability_results.sqlite3",
+    "case_chunk_size": 75,
+    "dry_run": false
+  }
+}

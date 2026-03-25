@@ -1,0 +1,5 @@
+period_id,source,symbol,interval,start,end,period_signature
+btc_2024w01,binance_spot,BTCUSDT,1h,2024-01-01T00:00:00Z,2024-01-08T00:00:00Z,
+btc_2024w02,binance_spot,BTCUSDT,1h,2024-01-08T00:00:00Z,2024-01-15T00:00:00Z,
+btc_2024w03,binance_spot,BTCUSDT,1h,2024-01-15T00:00:00Z,2024-01-22T00:00:00Z,
+btc_2024w04,binance_spot,BTCUSDT,1h,2024-01-22T00:00:00Z,2024-01-29T00:00:00Z,

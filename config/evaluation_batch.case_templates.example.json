@@ -1,0 +1,24 @@
+[
+  {
+    "template_name": "threshold_base",
+    "case": {
+      "strategy": "threshold",
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "entry_threshold": 0.01,
+      "exit_threshold": -0.01
+    }
+  },
+  {
+    "template_name": "threshold_cost",
+    "case": {
+      "strategy": "threshold",
+      "initial_cash": 100000,
+      "fee_rate": 0.001,
+      "slippage_rate": 0.001,
+      "entry_threshold": 0.01,
+      "exit_threshold": -0.01
+    }
+  }
+]

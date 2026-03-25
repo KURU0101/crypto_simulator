@@ -133,6 +133,108 @@ source .venv/bin/activate
 make run-live-decision
 ```
 
+単一 period の market data 取得 / 再利用確認の最小実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_evaluation_market_data.py --source binance_spot --symbol BTCUSDT --start 2024-01-01T00:00:00Z --end 2024-01-01T02:00:00Z --interval 1h
+```
+
+単一 period × 単一 case の最小評価実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_evaluation_case.py --source binance_spot --symbol BTCUSDT --start 2024-01-01T00:00:00Z --end 2024-01-01T03:00:00Z --interval 1h --case-config path/to/case.json
+```
+
+複数 period × 複数 case の最小 batch 実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_evaluation_batch.py --config config/evaluation_batch.example.json
+```
+
+periods CSV + case templates + grids から batch runner へ接続する入力 adapter 実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_input.example.json
+```
+
+batch runner は CSV を維持したまま、結果 DB を追加保存先として持てます。period ごとに market data 解決と returns 生成を 1 回だけ行い、同一 period 配下の case を `case_chunk_size` 単位で流して CSV と SQLite へ逐次保存します。SQLite には run メタ情報と `1 period × 1 case = 1 row` の結果テーブルを保存し、`results_db_path` を省略した場合は `output_csv_path` と同じ場所に `*.sqlite3` を自動生成します。`dry_run: true` にすると fetch / case prepare / CSV 書き込み / DB 書き込みを行わずに、period 数、case 数、想定 row 数、使用 chunk サイズだけを確認できます。中規模 run を行うときは period と case を代表 subset に絞った設定ファイルを別途用意し、同じ実行入口でチャンク挙動と CSV / DB 整合を先に確認できます。
+
+入力 adapter では `periods_csv_path`、`case_templates_json_path`、`grids_csv_path` を使って batch runner の内部表現へ変換します。`periods.csv` は `period_id,source,symbol,interval,start,end` を必須列とし、`grids.csv` は `grid_id,template_name,overrides_json` を必須列とします。生成される case 名は `template_name__grid_id` で固定し、重複が出た場合は実行前にエラーにします。`period_limit` と `case_limit` を使うと dry run や小規模 subset 実行を同じ入口で行えます。
+
+外部通信を伴う actual run は、公開 JSON / 公開 RSS のみを対象とし、事前承認を必須にします。raw response body は保存しません。実行報告では、通信先、取得方式、保存範囲、failure 分類、承認経路の観測可能範囲を残します。具体的な run ごとの記録は `task.md` に置き、README は常設運用ルールだけを持ちます。
+
+市場データの `var/cache/market_data/...` 配下に置く OHLCV CSV artifact は、HTTP response body の生保存ではなく、取得後に `timestamp/open/high/low/close/volume` へ正規化した内部分析用途の cache として扱います。生の JSON body や HTML は保存しません。この cache は内部分析用途に限定して保持し、外部配布や再配布には使いません。
+
+CSV / DB の二重保存は run ごとに append ではなく新しい `run_id` を切る前提です。中断時はその時点までの CSV 行と DB 行を残し、再実行では既存 run を上書きせず新しい run として追跡します。部分再開や旧 run への追記ルールは未実装で、後続タスクで扱います。
+
+`case_limit` は period ごとの上限ではなく、grid から生成される全 case 数の上限です。実行時はその上限までの case 集合を period ごとに再利用します。grid は period ごとに再走査しますが、これは全 case 一括展開を避けてメモリ安全を優先するためです。
+
+初版の実験入力として [evaluation_batch_initial.periods.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.periods.csv) 、 [evaluation_batch_initial.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.case_templates.json) 、 [evaluation_batch_initial.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.grids.csv) を追加しています。full dry run は [evaluation_batch_initial.full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.full.json) 、小規模実データ run は [evaluation_batch_initial.small.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.small.json) を使います。
+
+公式 scale 名は `small / medium / full` の 3 段階です。現在の対応は、`small = 132 rows`、`medium = 4224 rows`、`full = 9216 rows` です。旧名称の `seed/smoke`、`operational pilot full`、`current-stack planning`、`current-stack ceiling` は移行期の内部呼称としてだけ残し、常用の公式名称からは外します。
+
+現在の公式 scale と config の対応は次のとおりです。
+
+- `small`: 旧 medium actual run。config は [evaluation_batch_operational.medium.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.medium.json)
+- `medium`: 旧 current-stack planning actual run。dry run は [evaluation_batch_operational.planning.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.planning.json) 、actual run は [evaluation_batch_operational.planning.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.planning.actual.json)
+- `full`: 旧 current-stack ceiling actual run。dry run は [evaluation_batch_operational.ceiling.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.ceiling.json) 、actual run は [evaluation_batch_operational.ceiling.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.ceiling.actual.json)
+
+内部呼称としての補助 config も残しています。`seed/smoke` に相当する初期確認は [evaluation_batch_initial.small.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.small.json) 、`operational pilot full` は [evaluation_batch_operational.pilot_full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.pilot_full.json) と [evaluation_batch_operational.pilot_full.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.pilot_full.actual.json) を使います。
+
+dry run 用 config と actual run 用 config は分けます。`dry_run` フラグの切り替えで同一ファイルを流用せず、actual run では専用 config を使って上書き事故と実行取り違えを避けます。
+
+初版 input の確認コマンド:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_initial.full.json
+python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_initial.small.json
+```
+
+2026-03-25 の確認では、full dry run は `total_periods=4`、`total_cases=8`、`planned_rows=32`、`case_chunk_size=4` でした。小規模実データ run は `period_limit=1`、`case_limit=3`、`case_chunk_size=2` で `run_id=20260325T053230Z_37b9bbef`、`total_rows=3`、`succeeded_rows=3`、`failed_rows=0` でした。小規模 run の 3 row は同一 artifact path を共有し、`fetched=True`、`reused_existing_artifact=False` を確認しています。
+
+同じ `output_csv_path` で再実行した場合、CSV はその run の内容で再生成されます。一方 SQLite は `run_id` 単位で追記されるため、同じ `results_db_path` に複数 run を保持できます。過去 run の CSV を残したい場合は `output_csv_path` を run ごとに分けます。
+
+scale ごとの出力先は分離します。公式運用では `small`、`medium`、`full` を別の CSV / SQLite path に分けます。旧内部呼称に対応する出力先も残しますが、official run の識別は `small / medium / full` を優先します。
+
+公式 scale と planning 系を分けて扱います。`small / medium / full` は current-stack の公式運用規模、`original planning baseline / ceiling baseline` は今後の大規模 planning 用の別枠です。`current initial full=32 rows` は `seed/smoke` 相当であり、公式 `full` ではありません。
+
+公式 scale の意味づけは次のとおりです。
+
+- `small = 132 rows`: 旧 medium actual run。代表性確認、CSV / DB / run メタ整合、period 単位 reuse の最小実運用規模
+- `medium = 4224 rows`: 旧 current-stack planning actual run。4224 rows 規模の評価・保存・整合性確認を持つが、fresh fetch を伴う検証ではなく cache-backed execution validation だったことを注記する
+- `full = 9216 rows`: 旧 current-stack ceiling actual run。reuse `4224` と fresh fetch `4992` の混在を確認済みで、今の current-stack で回す最終公式規模として扱う
+
+superseded completed runs は `run_id` 単位で追跡し、partial run とは区別します。CSV は latest run の内容で再生成されますが、SQLite では同じ path に複数の completed run を保持できます。
+
+original planning の件数は固定値を先に置くのではなく、parameter 軸の刻み方から説明します。自然な一例として、`consumption_series_name=5`、`entry_count_threshold=5`、`exit_after_inactive_periods=3`、`take_profit=3`、`stop_loss=3`、`max_hold_minutes=3`、`price_spike_limit=3`、`volume_multiplier=3` と刻むと、`signal-only ≈ 5×5×3 = 75 / period`、`minimal tradability ≈ 75×3×3×3 = 2025 / period`、`extended ≈ 2025×3×3 = 18225 / period` になります。期間側を `raw candidate periods ≈ 24`、`merged periods ≈ 10〜14` とみると、merged 12 件では `signal-only ≈ 900`、`minimal ≈ 24300`、`extended ≈ 218700`、raw 24 件では `signal-only ≈ 1800`、`minimal ≈ 48600`、`extended ≈ 437400` が自然な planning baseline です。
+
+original planning baseline 側の最初の actual run は、merged periods 12 × signal-only 75 = 900 rows を基準にします。period 定義は [original_planning_baseline.raw_candidates.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_baseline.raw_candidates.csv) 、[original_planning_baseline.raw_to_merged.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_baseline.raw_to_merged.csv) 、[original_planning_baseline.merged_periods.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_baseline.merged_periods.csv) に分け、raw 24 と merged 12 の対応関係と merge 理由を追えるようにしています。
+
+signal-only 75 は [original_planning_signal_only.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_signal_only.case_templates.json) と [original_planning_signal_only.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_signal_only.grids.csv) で定義しています。軸は `consumption_series_name` の 5 値、`entry_count_threshold` の 5 値、`exit_after_inactive_periods` の 3 値だけを展開し、`5 × 5 × 3 = 75 cases / period` とします。`take_profit`、`stop_loss`、`max_hold_minutes`、`price_spike_limit`、`volume_multiplier` は original planning baseline の parameter 軸としては保持しますが、この signal-only run では展開しません。
+
+dry run 用 config は [original_planning_signal_only.dry_run.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_signal_only.dry_run.json) 、actual run 用 config は [original_planning_signal_only.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_signal_only.actual.json) です。2026-03-26 の dry run では `total_periods=12`、`total_cases=75`、`planned_rows=900`、`case_chunk_size=25` を確認しました。
+
+同日の actual run は `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_signal_only.actual.json` で実行し、latest run は `run_id=20260325T181535Z_d3b84d67`、`planned_rows=900`、`total_rows=900`、`succeeded_rows=900`、`failed_rows=0` でした。CSV は `var/evaluation_batch/original_planning_signal_only_results.csv`、SQLite は `var/evaluation_batch/original_planning_signal_only_results.sqlite3` です。latest run の row 数は CSV / DB ともに 900 で一致し、artifact path は 12 個、`reused_existing_artifact=True = 225`、`fetched=True = 675` でした。current-stack 側と window が一致する merged periods 3 件は cross-run reuse、残り 9 件は fresh fetch です。
+
+この original planning signal-only 実行の前には、`run_id=20260325T181438Z_51157164` の failed run が DB に残っています。原因は `matching_signal_count` が当時の許容 consumption series に含まれていなかったことと、case prepare 例外時の batch runner 例外経路不備でした。これは superseded failed run record であり、latest completed run の partial 残留ではありません。CSV は latest run の内容で再生成され、SQLite では run_id 単位で両 run を追跡します。
+
+original planning baseline の次段は merged periods 12 × minimal tradability 2025 = 24300 rows です。template は [original_planning_minimal_tradability.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_minimal_tradability.case_templates.json) 、grid は [original_planning_minimal_tradability.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_minimal_tradability.grids.csv) に定義しています。signal-only の 3 軸は維持しつつ、`take_profit`、`stop_loss`、`max_hold_minutes` を low / mid / high の 3 値ずつ追加し、`75 × 3 × 3 × 3 = 2025 cases / period` とします。今回の刻みは `take_profit = 0.02 / 0.04 / 0.06`、`stop_loss = -0.01 / -0.02 / -0.03`、`max_hold_minutes = 720 / 1440 / 2880` です。
+
+dry run 用 config は [original_planning_minimal_tradability.dry_run.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_minimal_tradability.dry_run.json) 、actual run 用 config は [original_planning_minimal_tradability.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_minimal_tradability.actual.json) です。2026-03-26 の dry run では `total_periods=12`、`total_cases=2025`、`planned_rows=24300`、`case_chunk_size=75` を確認しました。
+
+同日の actual run は `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_minimal_tradability.actual.json` で実行し、latest run は `run_id=20260325T183155Z_f4c390a1`、`planned_rows=24300`、`total_rows=24300`、`succeeded_rows=24300`、`failed_rows=0` でした。CSV は `var/evaluation_batch/original_planning_minimal_tradability_results.csv`、SQLite は `var/evaluation_batch/original_planning_minimal_tradability_results.sqlite3` です。latest run の row 数は CSV / DB ともに 24300 で一致し、artifact path は 12 個、`reused_existing_artifact=True = 24300`、`fetched=True = 0` でした。signal-only 900-row run と shared window は 12 / 12 で、artifact path も 12 / 12 で一致しました。
+
+original planning baseline の次段として、merged periods 12 × extended 18225 = 218700 rows も実行しています。template は [original_planning_extended.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_extended.case_templates.json) 、grid は [original_planning_extended.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_extended.grids.csv) です。minimal tradability の 6 軸に加えて、`price_spike_limit = 0.03 / 0.05 / 0.07` と `volume_multiplier = 1.0 / 1.5 / 2.0` を追加し、`2025 × 3 × 3 = 18225 cases / period` としています。
+
+dry run 用 config は [original_planning_extended.dry_run.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_extended.dry_run.json) 、actual run 用 config は [original_planning_extended.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/original_planning_extended.actual.json) です。2026-03-26 の dry run では `total_periods=12`、`total_cases=18225`、`planned_rows=218700`、`case_chunk_size=225` を確認しました。
+
+同日の actual run は `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_extended.actual.json` で実行し、latest run は `run_id=20260325T183929Z_62c407b6`、`planned_rows=218700`、`total_rows=218700`、`succeeded_rows=218700`、`failed_rows=0` でした。CSV は `var/evaluation_batch/original_planning_extended_results.csv`、SQLite は `var/evaluation_batch/original_planning_extended_results.sqlite3` です。latest run の row 数は CSV / DB ともに 218700 で一致し、artifact path は 12 個、`reused_existing_artifact=True = 218700`、`fetched=True = 0` でした。minimal 24300-row run と shared window は 12 / 12、artifact path も 12 / 12 で一致しました。
+
 ## 手動確認
 
 `python3 scripts/run_simulation.py --config config/simulation.example.json` を実行し、出力 JSON の以下を確認します。

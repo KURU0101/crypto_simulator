@@ -1,0 +1,12 @@
+period_id,source,symbol,interval,start,end,period_signature
+g_2023q1_bank_stress,binance_spot,BTCUSDT,1h,2023-02-23T00:00:00Z,2023-03-25T00:00:00Z,
+g_2023q2_etf_reg,binance_spot,BTCUSDT,1h,2023-05-31T00:00:00Z,2023-07-28T00:00:00Z,
+g_2023q4_exchange_reg,binance_spot,BTCUSDT,1h,2023-11-06T00:00:00Z,2023-12-06T00:00:00Z,
+g_2024q1_etf_cycle,binance_spot,BTCUSDT,1h,2023-12-26T00:00:00Z,2024-01-25T00:00:00Z,
+g_2024q1_price_discovery,binance_spot,BTCUSDT,1h,2024-02-28T00:00:00Z,2024-03-29T00:00:00Z,
+g_2024q2_halving_etf,binance_spot,BTCUSDT,1h,2024-04-05T00:00:00Z,2024-05-15T00:00:00Z,
+g_2024q3_macro_liquidation,binance_spot,BTCUSDT,1h,2024-07-21T00:00:00Z,2024-08-20T00:00:00Z,
+g_2024q3_macro_policy,binance_spot,BTCUSDT,1h,2024-09-03T00:00:00Z,2024-10-03T00:00:00Z,
+g_2024q4_us_policy,binance_spot,BTCUSDT,1h,2024-10-21T00:00:00Z,2024-12-20T00:00:00Z,
+g_2025q1_us_policy,binance_spot,BTCUSDT,1h,2025-01-05T00:00:00Z,2025-02-04T00:00:00Z,
+g_2025q2_macro_trade,binance_spot,BTCUSDT,1h,2025-03-18T00:00:00Z,2025-04-17T00:00:00Z,

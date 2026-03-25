@@ -1,0 +1,9 @@
+grid_id,template_name,overrides_json,enabled
+entry_100_exit_040,threshold_base,"{""entry_threshold"": 0.01, ""exit_threshold"": -0.004}",true
+entry_120_exit_060,threshold_base,"{""entry_threshold"": 0.012, ""exit_threshold"": -0.006}",true
+entry_100_exit_040,threshold_cost,"{""entry_threshold"": 0.01, ""exit_threshold"": -0.004}",true
+entry_120_exit_060,threshold_cost,"{""entry_threshold"": 0.012, ""exit_threshold"": -0.006}",true
+window_2_entry_040_exit_100,cumulative_drop_base,"{""entry_window"": 2, ""entry_cumulative_threshold"": -0.004, ""exit_threshold"": 0.01}",true
+window_3_entry_060_exit_100,cumulative_drop_base,"{""entry_window"": 3, ""entry_cumulative_threshold"": -0.006, ""exit_threshold"": 0.01}",true
+periods_2_drop_030_exit_100,consecutive_drop_base,"{""consecutive_periods"": 2, ""drop_threshold"": -0.003, ""exit_threshold"": 0.01}",true
+periods_3_drop_040_exit_100,consecutive_drop_base,"{""consecutive_periods"": 3, ""drop_threshold"": -0.004, ""exit_threshold"": 0.01}",true

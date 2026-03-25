@@ -14,6 +14,7 @@ DEFAULT_BLENDED_SYMBOL_WEIGHT = 0.7
 DEFAULT_BLENDED_TOPIC_WEIGHT = 0.3
 DEFAULT_CONSUMPTION_SERIES_NAME = "weighted_matching_signal_count"
 ALLOWED_CONSUMPTION_SERIES_NAMES = (
+    "matching_signal_count",
     "weighted_matching_signal_count",
     "blended_weighted_signal_count",
 )
