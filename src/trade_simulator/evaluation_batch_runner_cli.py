@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
         output_csv_path=batch_config["output_csv_path"],
         cache_root=batch_config["cache_root"],
         shared_state_db_path=batch_config["shared_state_db_path"],
+        results_db_path=batch_config["results_db_path"],
+        config_path=args.config,
         case_chunk_size=batch_config["case_chunk_size"],
         dry_run=batch_config["dry_run"],
     )

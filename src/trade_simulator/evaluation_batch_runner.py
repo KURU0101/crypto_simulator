@@ -4,6 +4,16 @@ import csv
 from itertools import islice
 from pathlib import Path
 
+from trade_simulator.evaluation_batch_results_db import (
+    build_evaluation_run_config_fingerprint,
+    build_evaluation_run_record,
+    create_evaluation_run,
+    generate_evaluation_run_id,
+    initialize_evaluation_results_db,
+    insert_evaluation_result_rows,
+    render_utc_now,
+    update_evaluation_run,
+)
 from trade_simulator.evaluation_market_data import (
     build_market_data_acquisition_key,
     resolve_evaluation_market_data,
@@ -81,6 +91,14 @@ def _validate_batch_period(period_config: object, index: int) -> dict:
     return normalized
 
 
+def _resolve_results_db_path(results_db_path: object, *, output_csv_path: str | Path) -> str:
+    if results_db_path in (None, ""):
+        return str(Path(output_csv_path).with_suffix(".sqlite3"))
+    if not isinstance(results_db_path, (str, Path)):
+        raise ValueError("results_db_path must be a string path")
+    return str(results_db_path)
+
+
 def load_evaluation_batch_config(config: object) -> dict:
     if not isinstance(config, dict):
         raise ValueError("evaluation batch config must be a dict")
@@ -104,6 +122,7 @@ def load_evaluation_batch_config(config: object) -> dict:
         "output_csv_path": str(config["output_csv_path"]).strip(),
         "cache_root": str(config.get("cache_root", "var/cache/market_data/ohlcv")),
         "shared_state_db_path": str(config.get("shared_state_db_path", "var/cache/market_data/shared_state.sqlite3")),
+        "results_db_path": _resolve_results_db_path(config.get("results_db_path"), output_csv_path=config["output_csv_path"]),
         "case_chunk_size": _validate_positive_int(config.get("case_chunk_size", DEFAULT_CASE_CHUNK_SIZE), "case_chunk_size"),
         "dry_run": bool(config.get("dry_run", False)),
     }
@@ -257,6 +276,8 @@ def _build_dry_run_result(
     case_chunk_size: int,
     cache_root: str | Path,
     shared_state_db_path: str | Path,
+    results_db_path: str | Path,
+    config_fingerprint: str,
 ) -> dict[str, object]:
     return {
         "dry_run": True,
@@ -265,8 +286,10 @@ def _build_dry_run_result(
         "planned_rows": len(periods) * len(cases),
         "case_chunk_size": case_chunk_size,
         "output_csv_path": str(output_csv_path),
+        "results_db_path": str(results_db_path),
         "cache_root": str(cache_root),
         "shared_state_db_path": str(shared_state_db_path),
+        "config_fingerprint": config_fingerprint,
     }
 
 
@@ -277,14 +300,33 @@ def run_evaluation_batch(
     output_csv_path: str | Path,
     cache_root: str | Path = "var/cache/market_data/ohlcv",
     shared_state_db_path: str | Path = "var/cache/market_data/shared_state.sqlite3",
+    results_db_path: str | Path | None = None,
+    config_path: str | Path | None = None,
     case_chunk_size: int = DEFAULT_CASE_CHUNK_SIZE,
     dry_run: bool = False,
     fetcher=None,
 ) -> dict[str, object]:
     total_cases = len(cases)
+    total_periods = len(periods)
+    planned_rows = total_periods * total_cases
     resolved_case_chunk_size = _validate_positive_int(case_chunk_size, "case_chunk_size")
+    resolved_results_db_path = _resolve_results_db_path(results_db_path, output_csv_path=output_csv_path)
+    resolved_config_path = None if config_path is None else str(config_path)
     for index, case in enumerate(cases):
         _validate_case_reference(case, index)
+
+    config_fingerprint = build_evaluation_run_config_fingerprint(
+        {
+            "periods": periods,
+            "cases": cases,
+            "output_csv_path": str(output_csv_path),
+            "cache_root": str(cache_root),
+            "shared_state_db_path": str(shared_state_db_path),
+            "results_db_path": resolved_results_db_path,
+            "case_chunk_size": resolved_case_chunk_size,
+            "dry_run": bool(dry_run),
+        }
+    )
 
     if dry_run:
         return _build_dry_run_result(
@@ -294,89 +336,157 @@ def run_evaluation_batch(
             case_chunk_size=resolved_case_chunk_size,
             cache_root=cache_root,
             shared_state_db_path=shared_state_db_path,
+            results_db_path=resolved_results_db_path,
+            config_fingerprint=config_fingerprint,
         )
 
     csv_path = _initialize_output_csv(output_csv_path)
+    initialized_results_db_path = initialize_evaluation_results_db(resolved_results_db_path)
+    run_id = generate_evaluation_run_id()
+    run_record = build_evaluation_run_record(
+        run_id=run_id,
+        config_path=resolved_config_path,
+        config_fingerprint=config_fingerprint,
+        total_periods=total_periods,
+        total_cases=total_cases,
+        planned_rows=planned_rows,
+        output_csv_path=str(csv_path),
+        results_db_path=str(initialized_results_db_path),
+    )
+    create_evaluation_run(initialized_results_db_path, run_record)
     total_rows = 0
     failed_rows = 0
     succeeded_rows = 0
 
-    for period in periods:
-        acquisition_key = build_market_data_acquisition_key(
-            source=period["source"],
-            symbol=period["symbol"],
-            interval=period["interval"],
-            window_start=period["start"],
-            window_end=period["end"],
-        )
-        try:
-            market_data_result = resolve_evaluation_market_data(
+    try:
+        for period in periods:
+            acquisition_key = build_market_data_acquisition_key(
                 source=period["source"],
                 symbol=period["symbol"],
                 interval=period["interval"],
                 window_start=period["start"],
                 window_end=period["end"],
-                cache_root=cache_root,
-                shared_state_db_path=shared_state_db_path,
-                period_signature=period.get("period_signature", ""),
-                fetcher=fetcher,
             )
-            returns_payload = build_returns_payload_from_rows(market_data_result["rows"])
-        except Exception as error:
-            for case_chunk in _iter_case_chunks(cases, resolved_case_chunk_size):
-                chunk_rows = [
-                    _build_market_data_error_row(
-                        period=period,
-                        case_name=str(case["name"]),
-                        acquisition_key=acquisition_key,
-                        error=error,
-                    )
-                    for case in case_chunk
-                ]
-                _append_csv_rows(csv_path, chunk_rows)
-                total_rows += len(chunk_rows)
-                failed_rows += len(chunk_rows)
-            continue
-
-        for case_chunk in _iter_prepared_case_chunks(cases, resolved_case_chunk_size):
-            chunk_rows: list[dict[str, object]] = []
-            for case in case_chunk:
-                try:
-                    case_result = evaluate_prepared_case_with_returns(
-                        prepared_case=case,
-                        returns_payload=returns_payload,
-                    )
-                except Exception as error:
-                    chunk_rows.append(
-                        _build_case_error_row(
+            try:
+                market_data_result = resolve_evaluation_market_data(
+                    source=period["source"],
+                    symbol=period["symbol"],
+                    interval=period["interval"],
+                    window_start=period["start"],
+                    window_end=period["end"],
+                    cache_root=cache_root,
+                    shared_state_db_path=shared_state_db_path,
+                    period_signature=period.get("period_signature", ""),
+                    fetcher=fetcher,
+                )
+                returns_payload = build_returns_payload_from_rows(market_data_result["rows"])
+            except Exception as error:
+                for case_chunk in _iter_case_chunks(cases, resolved_case_chunk_size):
+                    chunk_rows = [
+                        _build_market_data_error_row(
                             period=period,
-                            market_data_result=market_data_result,
-                            returns_payload=returns_payload,
                             case_name=str(case["name"]),
+                            acquisition_key=acquisition_key,
                             error=error,
                         )
+                        for case in case_chunk
+                    ]
+                    _append_csv_rows(csv_path, chunk_rows)
+                    insert_evaluation_result_rows(
+                        initialized_results_db_path,
+                        run_id=run_id,
+                        rows=chunk_rows,
                     )
-                    failed_rows += 1
-                    continue
+                    total_rows += len(chunk_rows)
+                    failed_rows += len(chunk_rows)
+                    update_evaluation_run(
+                        initialized_results_db_path,
+                        run_id=run_id,
+                        succeeded_rows=succeeded_rows,
+                        failed_rows=failed_rows,
+                        status="running",
+                    )
+                continue
 
-                chunk_rows.append(
-                    _build_success_row(
-                        period=period,
-                        market_data_result=market_data_result,
-                        case_result=case_result,
+            for case_chunk in _iter_prepared_case_chunks(cases, resolved_case_chunk_size):
+                chunk_rows: list[dict[str, object]] = []
+                for case in case_chunk:
+                    try:
+                        case_result = evaluate_prepared_case_with_returns(
+                            prepared_case=case,
+                            returns_payload=returns_payload,
+                        )
+                    except Exception as error:
+                        chunk_rows.append(
+                            _build_case_error_row(
+                                period=period,
+                                market_data_result=market_data_result,
+                                returns_payload=returns_payload,
+                                case_name=str(case["name"]),
+                                error=error,
+                            )
+                        )
+                        failed_rows += 1
+                        continue
+
+                    chunk_rows.append(
+                        _build_success_row(
+                            period=period,
+                            market_data_result=market_data_result,
+                            case_result=case_result,
+                        )
                     )
+                    succeeded_rows += 1
+                _append_csv_rows(csv_path, chunk_rows)
+                insert_evaluation_result_rows(
+                    initialized_results_db_path,
+                    run_id=run_id,
+                    rows=chunk_rows,
                 )
-                succeeded_rows += 1
-            _append_csv_rows(csv_path, chunk_rows)
-            total_rows += len(chunk_rows)
+                total_rows += len(chunk_rows)
+                update_evaluation_run(
+                    initialized_results_db_path,
+                    run_id=run_id,
+                    succeeded_rows=succeeded_rows,
+                    failed_rows=failed_rows,
+                    status="running",
+                )
+    except Exception:
+        update_evaluation_run(
+            initialized_results_db_path,
+            run_id=run_id,
+            succeeded_rows=succeeded_rows,
+            failed_rows=failed_rows,
+            status="failed",
+            ended_at=render_utc_now(),
+        )
+        raise
 
+    final_status = "completed_with_failures" if failed_rows else "completed"
+    ended_at = render_utc_now()
+    update_evaluation_run(
+        initialized_results_db_path,
+        run_id=run_id,
+        succeeded_rows=succeeded_rows,
+        failed_rows=failed_rows,
+        status=final_status,
+        ended_at=ended_at,
+    )
     return {
         "dry_run": False,
-        "total_periods": len(periods),
+        "run_id": run_id,
+        "run_status": final_status,
+        "started_at": str(run_record["started_at"]),
+        "ended_at": ended_at,
+        "config_path": resolved_config_path,
+        "config_fingerprint": config_fingerprint,
+        "total_periods": total_periods,
         "total_cases": total_cases,
+        "planned_rows": planned_rows,
         "case_chunk_size": resolved_case_chunk_size,
         "total_rows": total_rows,
         "succeeded_rows": succeeded_rows,
         "failed_rows": failed_rows,
         "output_csv_path": str(csv_path),
+        "results_db_path": str(initialized_results_db_path),
     }

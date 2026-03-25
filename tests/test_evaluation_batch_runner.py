@@ -357,6 +357,7 @@ def test_load_evaluation_batch_config_reads_minimal_shape() -> None:
     )
 
     assert loaded["output_csv_path"] == "var/results.csv"
+    assert loaded["results_db_path"] == "var/results.sqlite3"
     assert loaded["periods"][0]["period_id"] == "p1"
     assert loaded["cases"][0]["name"] == "case_a"
     assert loaded["case_chunk_size"] == DEFAULT_CASE_CHUNK_SIZE
@@ -369,11 +370,13 @@ def test_load_evaluation_batch_config_reads_chunk_size_and_dry_run() -> None:
             "periods": [_period("p1", "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z")],
             "cases": [_threshold_case("case_a")],
             "output_csv_path": "var/results.csv",
+            "results_db_path": "var/results_db.sqlite3",
             "case_chunk_size": 25,
             "dry_run": True,
         }
     )
 
+    assert loaded["results_db_path"] == "var/results_db.sqlite3"
     assert loaded["case_chunk_size"] == 25
     assert loaded["dry_run"] is True
 

@@ -48,12 +48,11 @@
 - ステップ2:
   - 結果保存用の SQLite を追加する
   - run 単位メタ情報と `1 period × 1 case` 行を保存する
-  - CSV との役割関係を整理し、後分析導線を安定化する
+  - CSV を維持したまま DB を追加保存先として導入し、CSV と DB の整合を優先する
 
 ## Open Questions
 
 - CSV を主保存に残すか、DB を主保存にして CSV を副出力にするか
-- result テーブルの一意性を `run_id + period_id + case_name` にするか、別の case 識別子を導入するか
 - 再実行時に新しい `run_id` で積み増すだけにするか、部分再開も考慮するか
 
 ## Risks
@@ -73,20 +72,19 @@
 - 本時点では、文書責務を `AGENTS.md` / `project_context.md` / `task.md` に再整理した
 - ステップ1として、period 単位処理、設定可能な case chunk 処理、CSV 逐次保存、`dry_run` を batch runner に追加した
 - ステップ1の README / config example / テストを更新した
+- ステップ2として、run メタ情報テーブルと `1 period × 1 case` 結果テーブルを SQLite に追加し、CSV と並行して逐次保存できるようにした
+- step2 の DB 保存テスト、CSV-DB 整合テスト、README / config example を更新した
 
 ## Not Yet Implemented
 
-- 結果テーブルの DB 保存
 - DB 主体運用時の CSV との最終的な役割整理
 - 部分再開方針
 
 ## Next Candidate Tasks
 
-- ステップ2として、結果 DB を追加し、逐次保存へ切り替える
 - 必要なら、ステップ1完了後に保存形式の主従関係を明確化する
 
 ## Next Approval Gate
 
 - 現在の公式タスクは上記 2 件のままとする
-- 次の承認待ちは、ステップ1実装結果の確認後にステップ2へ進む承認である
-- ステップ2承認までは、結果 DB 化には着手しない
+- 次の承認待ちは、step2 実装結果を確認したうえで、DB 主体化や次タスクへ進む承認である
