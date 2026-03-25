@@ -158,6 +158,56 @@ def test_run_evaluation_batch_appends_rows_per_case_chunk(tmp_path: Path, monkey
     assert len(rows) == 5
 
 
+def test_run_evaluation_batch_prepares_cases_per_chunk_instead_of_all_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trade_simulator import evaluation_batch_runner as batch_runner_module
+
+    prepared_count = 0
+    prepared_counts_at_append: list[int] = []
+    original_prepare_single_case = batch_runner_module.prepare_single_case
+    original_append_csv_rows = batch_runner_module._append_csv_rows
+
+    def recording_prepare_single_case(case):
+        nonlocal prepared_count
+        prepared_count += 1
+        return original_prepare_single_case(case)
+
+    def recording_append_csv_rows(output_csv_path, rows):
+        prepared_counts_at_append.append(prepared_count)
+        return original_append_csv_rows(output_csv_path, rows)
+
+    monkeypatch.setattr(
+        "trade_simulator.evaluation_batch_runner.prepare_single_case",
+        recording_prepare_single_case,
+    )
+    monkeypatch.setattr(
+        "trade_simulator.evaluation_batch_runner._append_csv_rows",
+        recording_append_csv_rows,
+    )
+
+    csv_path = tmp_path / "results.csv"
+    result = run_evaluation_batch(
+        periods=[_period("p1", "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z")],
+        cases=[
+            _threshold_case("case_a"),
+            _threshold_case("case_b"),
+            _threshold_case("case_c"),
+            _threshold_case("case_d"),
+            _threshold_case("case_e"),
+        ],
+        output_csv_path=csv_path,
+        cache_root=tmp_path / "cache",
+        shared_state_db_path=tmp_path / "shared_state.sqlite3",
+        case_chunk_size=2,
+        fetcher=lambda **kwargs: _sample_rows_a(),
+    )
+
+    assert result["case_chunk_size"] == 2
+    assert prepared_count == 5
+    assert prepared_counts_at_append == [2, 4, 5]
+
+
 def test_run_evaluation_batch_keeps_running_when_one_case_fails(tmp_path: Path) -> None:
     csv_path = tmp_path / "results.csv"
     result = run_evaluation_batch(
@@ -256,13 +306,26 @@ def test_run_evaluation_batch_supports_multiple_periods_single_case_boundary(tmp
     assert result["total_rows"] == 2
 
 
-def test_run_evaluation_batch_dry_run_skips_fetch_and_csv_write(tmp_path: Path) -> None:
+def test_run_evaluation_batch_dry_run_skips_fetch_and_csv_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fetch_count = 0
+    prepare_count = 0
 
     def fetcher(**kwargs):
         nonlocal fetch_count
         fetch_count += 1
         return _sample_rows_a()
+
+    def recording_prepare_single_case(case):
+        nonlocal prepare_count
+        prepare_count += 1
+        return case
+
+    monkeypatch.setattr(
+        "trade_simulator.evaluation_batch_runner.prepare_single_case",
+        recording_prepare_single_case,
+    )
 
     csv_path = tmp_path / "results.csv"
     result = run_evaluation_batch(
@@ -277,6 +340,7 @@ def test_run_evaluation_batch_dry_run_skips_fetch_and_csv_write(tmp_path: Path) 
     )
 
     assert fetch_count == 0
+    assert prepare_count == 0
     assert result["dry_run"] is True
     assert result["planned_rows"] == 2
     assert result["case_chunk_size"] == 3

@@ -50,6 +50,17 @@ def _validate_positive_int(value: object, name: str) -> int:
     return value
 
 
+def _validate_case_reference(case_config: object, index: int | None = None) -> dict:
+    label = f"cases[{index}]" if index is not None else "case config"
+    if not isinstance(case_config, dict):
+        raise ValueError(f"{label} must be a dict")
+    if "name" not in case_config:
+        raise ValueError(f"{label} must include name")
+    if not isinstance(case_config["name"], str) or not str(case_config["name"]).strip():
+        raise ValueError(f"{label} name must be a non-empty string")
+    return case_config
+
+
 def _validate_batch_period(period_config: object, index: int) -> dict:
     if not isinstance(period_config, dict):
         raise ValueError(f"periods[{index}] must be a dict")
@@ -81,7 +92,7 @@ def load_evaluation_batch_config(config: object) -> dict:
         raise ValueError("evaluation batch config must include output_csv_path")
 
     periods = [_validate_batch_period(period, index) for index, period in enumerate(config["periods"])]
-    cases = [prepare_single_case(case) for case in config["cases"]]
+    cases = [_validate_case_reference(case, index) for index, case in enumerate(config["cases"])]
     if not periods:
         raise ValueError("periods must not be empty")
     if not cases:
@@ -233,6 +244,11 @@ def _iter_case_chunks(cases: list[dict], case_chunk_size: int):
         yield chunk
 
 
+def _iter_prepared_case_chunks(cases: list[dict], case_chunk_size: int):
+    for case_chunk in _iter_case_chunks(cases, case_chunk_size):
+        yield [prepare_single_case(case) for case in case_chunk]
+
+
 def _build_dry_run_result(
     *,
     periods: list[dict],
@@ -265,13 +281,15 @@ def run_evaluation_batch(
     dry_run: bool = False,
     fetcher=None,
 ) -> dict[str, object]:
-    prepared_cases = [prepare_single_case(case) for case in cases]
+    total_cases = len(cases)
     resolved_case_chunk_size = _validate_positive_int(case_chunk_size, "case_chunk_size")
+    for index, case in enumerate(cases):
+        _validate_case_reference(case, index)
 
     if dry_run:
         return _build_dry_run_result(
             periods=periods,
-            cases=prepared_cases,
+            cases=cases,
             output_csv_path=output_csv_path,
             case_chunk_size=resolved_case_chunk_size,
             cache_root=cache_root,
@@ -305,7 +323,7 @@ def run_evaluation_batch(
             )
             returns_payload = build_returns_payload_from_rows(market_data_result["rows"])
         except Exception as error:
-            for case_chunk in _iter_case_chunks(prepared_cases, resolved_case_chunk_size):
+            for case_chunk in _iter_case_chunks(cases, resolved_case_chunk_size):
                 chunk_rows = [
                     _build_market_data_error_row(
                         period=period,
@@ -320,7 +338,7 @@ def run_evaluation_batch(
                 failed_rows += len(chunk_rows)
             continue
 
-        for case_chunk in _iter_case_chunks(prepared_cases, resolved_case_chunk_size):
+        for case_chunk in _iter_prepared_case_chunks(cases, resolved_case_chunk_size):
             chunk_rows: list[dict[str, object]] = []
             for case in case_chunk:
                 try:
@@ -355,7 +373,7 @@ def run_evaluation_batch(
     return {
         "dry_run": False,
         "total_periods": len(periods),
-        "total_cases": len(prepared_cases),
+        "total_cases": total_cases,
         "case_chunk_size": resolved_case_chunk_size,
         "total_rows": total_rows,
         "succeeded_rows": succeeded_rows,
