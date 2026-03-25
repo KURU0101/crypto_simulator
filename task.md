@@ -2,21 +2,20 @@
 
 ## Current Official Task
 
-1. current-stack ceiling actual run
+1. official scale 名の `small / medium / full` への整理
 
 ## Goal
 
-- current-stack ceiling actual run を再現可能な形で実行し、CSV / DB / run メタ / artifact / cross-run reuse 挙動を確認する
-- 外部通信 run の承認と記録ルールに沿って、実行条件・通信先・保存範囲・failure 分類を task.md に残す
-- 次の actual run 判断に向けて、current-stack ceiling の結果を current-stack scale 定義に結び付ける
+- official scale 名を `small / medium / full` の 3 段階に整理し、旧名称を内部呼称へ下げる
+- `medium` が cache-backed validation 実績であること、`full` が reuse + fresh fetch 混在であることを明記する
+- original planning baseline / ceiling baseline を、公式 scale とは別の planning 用概念として保持する
 
 ## In Scope
 
-- current-stack ceiling actual run を `config/evaluation_batch_operational.ceiling.actual.json` で実行する
-- 実行結果の CSV / DB 整合、run メタ、artifact 生成、cross-run reuse を確認する
-- 通信先、取得方式、実行条件変更、保存先、failure 分類、run_id を具体記録として残す
-- partial run 残留がないことを確認する
-- 次の actual run 候補を current-stack ceiling の結果に基づいて整理する
+- README と task の scale 定義を `small / medium / full` 中心へ更新する
+- 旧名称の `seed/smoke`、`operational pilot full`、`current-stack planning`、`current-stack ceiling` は移行期の内部呼称としてだけ残す
+- `current initial full=32` は seed/smoke 相当であり公式 full ではないことを明記する
+- superseded completed runs は partial run と区別して run_id 単位で追跡する前提を明記する
 
 ## Out of Scope
 
@@ -37,16 +36,15 @@
 - case 準備も含めて全件一括メモリ展開しない
 - case_name の一意性を入力展開側で保証する
 - 結果は CSV / DB に逐次保存し、途中成果を失わない
-- 今回 actual run の対象は current-stack ceiling だけに限定する
+- 今回は文書整理だけを行い、新しい actual run は行わない
 - original planning baseline / ceiling baseline の actual run は行わない
-- 外部通信 actual run は事前承認済みコマンドだけを使う
+- 既存の run 記録は run_id 単位で保持し、superseded completed run と partial run を混同しない
 
 ## Current Plan
 
-- `config/evaluation_batch_operational.ceiling.actual.json` を actual run 用 config として使い、ceiling を 1 回だけ実行する
-- 実行後に CSV / DB / run メタ / artifact / cross-run reuse / fresh fetch / partial run 残留を確認する
-- task.md に実行コマンド、run_id、通信先、保存先、failure 分類、結果件数を残す
-- ceiling 完了後の official scale 名を `small / medium / full` に再整理する案を出す
+- README に official scale の定義と旧名称の位置づけを反映する
+- task.md に公式 scale と内部呼称の対応、medium/full の注記、planning 用概念の位置づけを反映する
+- project_context.md は今回の目的に十分な情報が README / task に入るため、原則変更しない
 
 ## Open Questions
 
@@ -180,62 +178,53 @@
   - 保存先は `var/evaluation_batch/current_stack_ceiling_results.csv`、`var/evaluation_batch/current_stack_ceiling_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
   - raw body 保存は行っておらず、failure 分類は今回の current-stack ceiling latest run では該当なし、run status は `completed` である
 
-## Scale Definition
+## Official Scale Definition
 
-- `seed/smoke`:
-  - 目的: adapter / runner / CSV / DB / artifact の最小確認
-  - periods: 1
-  - cases: 3
-  - planned_rows: 3
-  - case_chunk_size: 2
-  - chunks: 2
-  - 実行条件: config 変更後の最初の実データ確認だけ
-  - 出力先: `var/evaluation_batch/seed_smoke_*`
 - `small`:
-  - 目的: 複数 case family と複数 chunk の確認
-  - periods: 2
-  - cases: 6
-  - planned_rows: 12
-  - case_chunk_size: 6
-  - chunks: 2
-  - 実行条件: seed/smoke 成功後
-  - 出力先: `var/evaluation_batch/small_*`
-- `medium`:
-  - 目的: merged periods 全件と signal-only full 近傍の representative cases による代表性確認
+  - 対応: 旧 medium actual run
+  - 目的: 代表性確認、CSV / DB / run メタ整合、period 単位 reuse の最小実運用規模
   - periods: 11
   - cases: 12
   - planned_rows: 132
   - case_chunk_size: 6
   - chunks: 22
-  - 実行条件: 外部通信 run ルール fix 後
+  - 実績注記: market data fetch と保存導線の最小実運用確認として承認済み
   - 出力先: `var/evaluation_batch/medium_*`
-- `operational pilot full`:
-  - 目的: current runner 上で実際に回す最初の大きめ run
+- `medium`:
+  - 対応: 旧 current-stack planning actual run
+  - 目的: 4224 rows 規模の評価・保存・整合性確認
   - periods: 11
-  - cases: 48
-  - planned_rows: 528
-  - case_chunk_size: 12
-  - chunks: 44
-  - 実行条件: medium 成功後
-  - 出力先: `var/evaluation_batch/operational_pilot_full_*`
-- `current-stack planning`:
-  - 目的: current-stack 上で conservative extended を掛けた planning 値
-  - periods: 11 merged periods
-  - cases: 384 extended
+  - cases: 384
   - planned_rows: 4224
   - case_chunk_size: 50
   - chunks: 88
-  - 実行条件: 直ちに実行しない
-  - 出力先: planning 用命名だけ定義
-- `current-stack ceiling`:
-  - 目的: current-stack の conservative extended を raw candidate 24 periods 相当まで広げた ceiling
-  - periods: 24 raw candidate periods 相当
-  - cases: 384 extended
+  - 実績注記: fresh fetch を伴う検証ではなく、cache-backed execution validation として承認済み
+  - 出力先: `var/evaluation_batch/current_stack_planning_*`
+- `full`:
+  - 対応: 旧 current-stack ceiling actual run
+  - 目的: 今の current-stack で回す最終公式規模
+  - periods: 24
+  - cases: 384
   - planned_rows: 9216
   - case_chunk_size: 50
   - chunks: 192
-  - 実行条件: 直ちに実行しない
-  - 出力先: planning 用命名だけ定義
+  - 実績注記: `reused_existing_artifact=True = 4224` と `fetched=True = 4992` の混在を確認済み
+  - 出力先: `var/evaluation_batch/current_stack_ceiling_*`
+
+## Transitional Internal Names
+
+- `seed/smoke`:
+  - 位置づけ: 初期確認用の内部呼称
+  - 対応: `current initial full=32` はここに属し、公式 `full` ではない
+- `operational pilot full`:
+  - 位置づけ: 移行期の保守的な大きめ run 用内部呼称
+  - 対応: `528 rows`
+- `current-stack planning`:
+  - 位置づけ: 現在の公式 `medium` に吸収された旧呼称
+  - 対応: `4224 rows`
+- `current-stack ceiling`:
+  - 位置づけ: 現在の公式 `full` に吸収された旧呼称
+  - 対応: `9216 rows`
 - `original planning baseline`:
   - 目的: 元の構想どおり sufficiently fine parameter grid を掛けた baseline
   - periods: merged periods 10〜14、代表値 12
@@ -264,10 +253,10 @@
 
 ## Next Candidate Tasks
 
-- current-stack ceiling actual run の結果を確認し、official scale 名を `small / medium / full` へ整理し直す
+- official scale 名の整理を確認し、必要なら README / task 上の旧呼称の露出をさらに減らす
 - original planning baseline / ceiling baseline を actual run するかどうかは別タスクで判断する
 - 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- current-stack ceiling actual run の結果確認後、official scale 名を `small / medium / full` に再整理する案の承認待ちにする
+- official scale 名の `small / medium / full` への整理内容を確認したうえで、次タスクを承認待ちにする

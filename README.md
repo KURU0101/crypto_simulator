@@ -175,7 +175,15 @@ CSV / DB の二重保存は run ごとに append ではなく新しい `run_id` 
 
 初版の実験入力として [evaluation_batch_initial.periods.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.periods.csv) 、 [evaluation_batch_initial.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.case_templates.json) 、 [evaluation_batch_initial.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.grids.csv) を追加しています。full dry run は [evaluation_batch_initial.full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.full.json) 、小規模実データ run は [evaluation_batch_initial.small.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.small.json) を使います。
 
-実行直前までの runnable scale として、[evaluation_batch_operational.periods.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.periods.csv) と [evaluation_batch_operational.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.case_templates.json) を共通入力にし、medium actual run は [evaluation_batch_operational.medium.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.medium.json) 、operational pilot full dry run は [evaluation_batch_operational.pilot_full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.pilot_full.json) 、operational pilot full actual run は [evaluation_batch_operational.pilot_full.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.pilot_full.actual.json) 、current-stack planning dry run は [evaluation_batch_operational.planning.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.planning.json) 、current-stack planning actual run は [evaluation_batch_operational.planning.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.planning.actual.json) 、current-stack ceiling dry run は [evaluation_batch_operational.ceiling.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.ceiling.json) 、current-stack ceiling actual run は [evaluation_batch_operational.ceiling.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.ceiling.actual.json) を使います。
+公式 scale 名は `small / medium / full` の 3 段階です。現在の対応は、`small = 132 rows`、`medium = 4224 rows`、`full = 9216 rows` です。旧名称の `seed/smoke`、`operational pilot full`、`current-stack planning`、`current-stack ceiling` は移行期の内部呼称としてだけ残し、常用の公式名称からは外します。
+
+現在の公式 scale と config の対応は次のとおりです。
+
+- `small`: 旧 medium actual run。config は [evaluation_batch_operational.medium.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.medium.json)
+- `medium`: 旧 current-stack planning actual run。dry run は [evaluation_batch_operational.planning.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.planning.json) 、actual run は [evaluation_batch_operational.planning.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.planning.actual.json)
+- `full`: 旧 current-stack ceiling actual run。dry run は [evaluation_batch_operational.ceiling.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.ceiling.json) 、actual run は [evaluation_batch_operational.ceiling.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.ceiling.actual.json)
+
+内部呼称としての補助 config も残しています。`seed/smoke` に相当する初期確認は [evaluation_batch_initial.small.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.small.json) 、`operational pilot full` は [evaluation_batch_operational.pilot_full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.pilot_full.json) と [evaluation_batch_operational.pilot_full.actual.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.pilot_full.actual.json) を使います。
 
 dry run 用 config と actual run 用 config は分けます。`dry_run` フラグの切り替えで同一ファイルを流用せず、actual run では専用 config を使って上書き事故と実行取り違えを避けます。
 
@@ -191,9 +199,17 @@ python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_b
 
 同じ `output_csv_path` で再実行した場合、CSV はその run の内容で再生成されます。一方 SQLite は `run_id` 単位で追記されるため、同じ `results_db_path` に複数 run を保持できます。過去 run の CSV を残したい場合は `output_csv_path` を run ごとに分けます。
 
-scale ごとの出力先は分離します。少なくとも `seed_smoke`、`small`、`medium`、`operational_pilot_full` は別の CSV / SQLite path を使い、`planning_full` と `ceiling_full` は件数整理だけに留め、すぐ実行する path と混ぜません。
+scale ごとの出力先は分離します。公式運用では `small`、`medium`、`full` を別の CSV / SQLite path に分けます。旧内部呼称に対応する出力先も残しますが、official run の識別は `small / medium / full` を優先します。
 
-scale の考え方は 2 系統に分けます。`current-stack` は現行 runner / adapter / conservative current input で今すぐ扱える規模、`original planning` は元の構想どおりに parameter を十分細かく刻んだときの planning 上の規模です。`current initial full=32 rows` は seed / smoke 相当であり、本命 full ではありません。
+公式 scale と planning 系を分けて扱います。`small / medium / full` は current-stack の公式運用規模、`original planning baseline / ceiling baseline` は今後の大規模 planning 用の別枠です。`current initial full=32 rows` は `seed/smoke` 相当であり、公式 `full` ではありません。
+
+公式 scale の意味づけは次のとおりです。
+
+- `small = 132 rows`: 旧 medium actual run。代表性確認、CSV / DB / run メタ整合、period 単位 reuse の最小実運用規模
+- `medium = 4224 rows`: 旧 current-stack planning actual run。4224 rows 規模の評価・保存・整合性確認を持つが、fresh fetch を伴う検証ではなく cache-backed execution validation だったことを注記する
+- `full = 9216 rows`: 旧 current-stack ceiling actual run。reuse `4224` と fresh fetch `4992` の混在を確認済みで、今の current-stack で回す最終公式規模として扱う
+
+superseded completed runs は `run_id` 単位で追跡し、partial run とは区別します。CSV は latest run の内容で再生成されますが、SQLite では同じ path に複数の completed run を保持できます。
 
 original planning の件数は固定値を先に置くのではなく、parameter 軸の刻み方から説明します。自然な一例として、`consumption_series_name=5`、`entry_count_threshold=5`、`exit_after_inactive_periods=3`、`take_profit=3`、`stop_loss=3`、`max_hold_minutes=3`、`price_spike_limit=3`、`volume_multiplier=3` と刻むと、`signal-only ≈ 5×5×3 = 75 / period`、`minimal tradability ≈ 75×3×3×3 = 2025 / period`、`extended ≈ 2025×3×3 = 18225 / period` になります。期間側を `raw candidate periods ≈ 24`、`merged periods ≈ 10〜14` とみると、merged 12 件では `signal-only ≈ 900`、`minimal ≈ 24300`、`extended ≈ 218700`、raw 24 件では `signal-only ≈ 1800`、`minimal ≈ 48600`、`extended ≈ 437400` が自然な planning baseline です。
 
