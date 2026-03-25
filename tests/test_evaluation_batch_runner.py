@@ -381,6 +381,17 @@ def test_load_evaluation_batch_config_reads_chunk_size_and_dry_run() -> None:
     assert loaded["dry_run"] is True
 
 
+def test_load_evaluation_batch_config_rejects_duplicate_case_names() -> None:
+    with pytest.raises(ValueError, match="name must be unique"):
+        load_evaluation_batch_config(
+            {
+                "periods": [_period("p1", "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z")],
+                "cases": [_threshold_case("dup"), _threshold_case("dup")],
+                "output_csv_path": "var/results.csv",
+            }
+        )
+
+
 def test_load_evaluation_batch_config_rejects_invalid_case_chunk_size() -> None:
     with pytest.raises(ValueError, match="case_chunk_size must be a positive int"):
         load_evaluation_batch_config(

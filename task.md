@@ -2,21 +2,20 @@
 
 ## Current Official Task
 
-1. 既存 runner を使って、大量ケースを現実的なメモリ制約の中で実行できるようにする
-2. 結果テーブルだけを DB 化して、後分析しやすくする
+1. 大量ケース実行のための入力接続と段階的実行
 
 ## Goal
 
-- 既存の evaluation runner / batch runner の責務分離を崩さず、大量ケース実行に耐える orchestration と結果保存導線を整える
-- `1 period × 1 case` 粒度の結果を途中失敗込みで保持し、後分析しやすい形へ整理する
+- periods / cases / parameter grids などの入力資産を既存 batch runner へ薄く接続し、dry run から小規模 run、本実行準備まで同じ導線で扱えるようにする
+- 既存の period 単位 market data reuse、case chunk 実行、CSV / DB 逐次保存を維持したまま、大量ケース実行の入口を整える
 
 ## In Scope
 
-- period ごとに market data を 1 回だけ解決し、returns を 1 回だけ生成する構造を守る
-- `period × case` の全件一括メモリ展開を避ける実行入口を設計・実装する
-- case を小さな単位で流し、結果を逐次保存する
-- run 単位メタ情報と `1 period × 1 case` 結果行を DB 保存できるようにする
-- 既存 runner から再利用できる case 実行ロジックを活かす
+- periods / case templates / grids を batch runner 入力へ変換する薄い adapter 層を作る
+- period 単位 + case chunk 単位の実行方針を維持する
+- case 展開時に一意な `case_name` を保証する
+- dry run、period / case subset 実行、本実行準備の導線を明確にする
+- CSV / DB 二重保存時の中断・再実行の最小運用ルールを明文化する
 
 ## Out of Scope
 
@@ -33,58 +32,49 @@
 
 - comparison / simulate の責務は増やさない
 - market data reuse の既存方針を崩さない
-- 今回 DB 化するのは結果だけとする
-- period 失敗時は、その period 配下の全 case に failed row を出し、他 period は続行する
-- 1 case 失敗で全体停止させず、failed row を保存して続行する
-- 結果は逐次保存し、途中成果を失わない
+- period ごとに market data を 1 回だけ解決し、returns を 1 回だけ生成する
+- case 準備も含めて全件一括メモリ展開しない
+- case_name の一意性を入力展開側で保証する
+- 結果は CSV / DB に逐次保存し、途中成果を失わない
 
 ## Current Plan
 
-- ステップ1:
-  - batch 実行の入力展開を period 単位 / case チャンク単位へ寄せる
-  - period ごとに market data 解決と returns 生成を 1 回だけ行う
-  - case 実行は既存 runner から切り出した helper を再利用し、結果は CSV 主保存で逐次保存する
-  - `case_chunk_size` を設定可能にし、`dry_run` で fetch なしの実行計画確認をできるようにする
-- ステップ2:
-  - 結果保存用の SQLite を追加する
-  - run 単位メタ情報と `1 period × 1 case` 行を保存する
-  - CSV を維持したまま DB を追加保存先として導入し、CSV と DB の整合を優先する
+- periods CSV と case templates / grids から batch runner 入力を組み立てる adapter を追加する
+- 既存 JSON batch config 入口は維持し、新しい入力資産用の入口を別で用意する
+- grid は遅延走査し、period ごとに fresh iterator を取り直して case chunk 単位に prepare / 実行する
+- `period_limit` / `case_limit` / `dry_run` を使って小規模確認と本実行準備を分ける
+- CSV / DB の中断・再実行は「新しい run_id を発行して積み増す」前提を明文化する
 
 ## Open Questions
 
-- CSV を主保存に残すか、DB を主保存にして CSV を副出力にするか
-- 再実行時に新しい `run_id` で積み増すだけにするか、部分再開も考慮するか
+- 既存 builder / manifest 資産を将来どこまで入力生成に流用するか
+- 部分再開を後続タスクで扱うか、run 単位積み増しを原則に固定するか
 
 ## Risks
 
-- 全件を先に巨大配列化するとメモリ制約を破る
-- orchestration が肥大化すると comparison との責務境界が崩れる
-- DB と CSV の二重保存が複雑化すると保守負荷が上がる
-- run 管理が曖昧だと後分析で結果の切り分けが難しくなる
+- grids 展開を先に巨大配列化するとメモリ制約を破る
+- 入力 adapter が runner 本体へ食い込むと責務境界が崩れる
+- case_name 一意性が崩れると CSV / DB の追跡が曖昧になる
+- 中断時と再実行時の扱いが曖昧だと run 単位分析が難しくなる
 
 ## Progress / Done
 
-- market data reuse 導線を実装済み
-- 単一 case runner を実装済み
-- 複数 period × 複数 case batch runner を実装済み
-- batch runner は `1 period × 1 case = 1 row` の CSV を出力し、最小 JSON summary を返す
-- 正式タスク 2 件にスコープを限定した
-- 本時点では、文書責務を `AGENTS.md` / `project_context.md` / `task.md` に再整理した
-- ステップ1として、period 単位処理、設定可能な case chunk 処理、CSV 逐次保存、`dry_run` を batch runner に追加した
-- ステップ1の README / config example / テストを更新した
-- ステップ2として、run メタ情報テーブルと `1 period × 1 case` 結果テーブルを SQLite に追加し、CSV と並行して逐次保存できるようにした
-- step2 の DB 保存テスト、CSV-DB 整合テスト、README / config example を更新した
+- step1 と step2 は完了済みとして承認された
+- period 単位 market data reuse、case chunk 実行、CSV / DB 逐次保存の batch runner 基盤は実装済み
+- 次の正式タスクとして、大量ケース実行のための入力接続と段階的実行へ切り替えた
+- 本タスクでは、periods / case templates / grids から batch runner へ接続する薄い adapter 入口を追加する
 
 ## Not Yet Implemented
 
-- DB 主体運用時の CSV との最終的な役割整理
+- builder / manifest の部分流用ルール
 - 部分再開方針
+- DB 主体運用への最終切替
 
 ## Next Candidate Tasks
 
-- 必要なら、ステップ1完了後に保存形式の主従関係を明確化する
+- 実運用前に中規模 subset と本実行前設定を確認する
+- 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- 現在の公式タスクは上記 2 件のままとする
-- 次の承認待ちは、step2 実装結果を確認したうえで、DB 主体化や次タスクへ進む承認である
+- 入力 adapter、dry run、小規模 run 導線、README / task 更新の実装結果を確認したうえで承認待ちに入る

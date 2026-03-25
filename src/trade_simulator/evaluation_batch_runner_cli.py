@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
         shared_state_db_path=batch_config["shared_state_db_path"],
         results_db_path=batch_config["results_db_path"],
         config_path=args.config,
+        config_fingerprint_payload=batch_config["config_fingerprint_payload"],
         case_chunk_size=batch_config["case_chunk_size"],
         dry_run=batch_config["dry_run"],
     )

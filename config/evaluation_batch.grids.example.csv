@@ -1,0 +1,4 @@
+grid_id,template_name,overrides_json,enabled
+entry_100_exit_100,threshold_base,"{""entry_threshold"": 0.01, ""exit_threshold"": -0.01}",true
+entry_120_exit_080,threshold_base,"{""entry_threshold"": 0.012, ""exit_threshold"": -0.008}",true
+entry_100_exit_100_cost,threshold_cost,"{""entry_threshold"": 0.01, ""exit_threshold"": -0.01}",true

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from itertools import islice
 from pathlib import Path
+from typing import Callable, Iterator
 
 from trade_simulator.evaluation_batch_results_db import (
     build_evaluation_run_config_fingerprint,
@@ -71,6 +72,15 @@ def _validate_case_reference(case_config: object, index: int | None = None) -> d
     return case_config
 
 
+def _validate_unique_case_names_for_list(cases: list[dict]) -> None:
+    seen_case_names: set[str] = set()
+    for index, case in enumerate(cases):
+        case_name = str(case.get("name", "")).strip()
+        if case_name in seen_case_names:
+            raise ValueError(f"cases[{index}] name must be unique: {case_name}")
+        seen_case_names.add(case_name)
+
+
 def _validate_batch_period(period_config: object, index: int) -> dict:
     if not isinstance(period_config, dict):
         raise ValueError(f"periods[{index}] must be a dict")
@@ -111,6 +121,7 @@ def load_evaluation_batch_config(config: object) -> dict:
 
     periods = [_validate_batch_period(period, index) for index, period in enumerate(config["periods"])]
     cases = [_validate_case_reference(case, index) for index, case in enumerate(config["cases"])]
+    _validate_unique_case_names_for_list(cases)
     if not periods:
         raise ValueError("periods must not be empty")
     if not cases:
@@ -125,6 +136,7 @@ def load_evaluation_batch_config(config: object) -> dict:
         "results_db_path": _resolve_results_db_path(config.get("results_db_path"), output_csv_path=config["output_csv_path"]),
         "case_chunk_size": _validate_positive_int(config.get("case_chunk_size", DEFAULT_CASE_CHUNK_SIZE), "case_chunk_size"),
         "dry_run": bool(config.get("dry_run", False)),
+        "config_fingerprint_payload": dict(config),
     }
 
 
@@ -254,7 +266,7 @@ def _append_csv_rows(output_csv_path: str | Path, rows: list[dict[str, object]])
     return path
 
 
-def _iter_case_chunks(cases: list[dict], case_chunk_size: int):
+def _iter_case_chunks(cases: object, case_chunk_size: int):
     iterator = iter(cases)
     while True:
         chunk = list(islice(iterator, case_chunk_size))
@@ -263,15 +275,40 @@ def _iter_case_chunks(cases: list[dict], case_chunk_size: int):
         yield chunk
 
 
-def _iter_prepared_case_chunks(cases: list[dict], case_chunk_size: int):
+def _iter_prepared_case_chunks(cases: object, case_chunk_size: int):
     for case_chunk in _iter_case_chunks(cases, case_chunk_size):
         yield [prepare_single_case(case) for case in case_chunk]
 
 
+def _resolve_case_iteration(
+    *,
+    cases: object | None,
+    case_iterator_factory: Callable[[], Iterator[dict[str, object]]] | None,
+    total_cases: int | None,
+) -> tuple[Callable[[], Iterator[dict[str, object]]], int]:
+    if cases is not None and case_iterator_factory is not None:
+        raise ValueError("cases and case_iterator_factory must not be used together")
+    if cases is None and case_iterator_factory is None:
+        raise ValueError("cases or case_iterator_factory is required")
+
+    if case_iterator_factory is not None:
+        if total_cases is None or total_cases <= 0:
+            raise ValueError("total_cases must be a positive int when case_iterator_factory is used")
+        return case_iterator_factory, total_cases
+
+    assert cases is not None
+    if not hasattr(cases, "__iter__") or not hasattr(cases, "__len__"):
+        raise ValueError("cases must be iterable and countable")
+    resolved_total_cases = len(cases)
+    if resolved_total_cases <= 0:
+        raise ValueError("cases must not be empty")
+    return lambda: iter(cases), resolved_total_cases
+
+
 def _build_dry_run_result(
     *,
-    periods: list[dict],
-    cases: list[dict],
+    total_periods: int,
+    total_cases: int,
     output_csv_path: str | Path,
     case_chunk_size: int,
     cache_root: str | Path,
@@ -281,9 +318,9 @@ def _build_dry_run_result(
 ) -> dict[str, object]:
     return {
         "dry_run": True,
-        "total_periods": len(periods),
-        "total_cases": len(cases),
-        "planned_rows": len(periods) * len(cases),
+        "total_periods": total_periods,
+        "total_cases": total_cases,
+        "planned_rows": total_periods * total_cases,
         "case_chunk_size": case_chunk_size,
         "output_csv_path": str(output_csv_path),
         "results_db_path": str(results_db_path),
@@ -296,42 +333,52 @@ def _build_dry_run_result(
 def run_evaluation_batch(
     *,
     periods: list[dict],
-    cases: list[dict],
+    cases: object | None = None,
+    case_iterator_factory: Callable[[], Iterator[dict[str, object]]] | None = None,
+    total_cases: int | None = None,
     output_csv_path: str | Path,
     cache_root: str | Path = "var/cache/market_data/ohlcv",
     shared_state_db_path: str | Path = "var/cache/market_data/shared_state.sqlite3",
     results_db_path: str | Path | None = None,
     config_path: str | Path | None = None,
+    config_fingerprint_payload: dict[str, object] | None = None,
     case_chunk_size: int = DEFAULT_CASE_CHUNK_SIZE,
     dry_run: bool = False,
     fetcher=None,
 ) -> dict[str, object]:
-    total_cases = len(cases)
+    case_iteration_factory, resolved_total_cases = _resolve_case_iteration(
+        cases=cases,
+        case_iterator_factory=case_iterator_factory,
+        total_cases=total_cases,
+    )
     total_periods = len(periods)
-    planned_rows = total_periods * total_cases
+    planned_rows = total_periods * resolved_total_cases
     resolved_case_chunk_size = _validate_positive_int(case_chunk_size, "case_chunk_size")
     resolved_results_db_path = _resolve_results_db_path(results_db_path, output_csv_path=output_csv_path)
     resolved_config_path = None if config_path is None else str(config_path)
-    for index, case in enumerate(cases):
-        _validate_case_reference(case, index)
 
-    config_fingerprint = build_evaluation_run_config_fingerprint(
-        {
-            "periods": periods,
-            "cases": cases,
-            "output_csv_path": str(output_csv_path),
-            "cache_root": str(cache_root),
-            "shared_state_db_path": str(shared_state_db_path),
-            "results_db_path": resolved_results_db_path,
-            "case_chunk_size": resolved_case_chunk_size,
-            "dry_run": bool(dry_run),
-        }
-    )
+    if isinstance(cases, list):
+        for index, case in enumerate(cases):
+            _validate_case_reference(case, index)
+        _validate_unique_case_names_for_list(cases)
+
+    fingerprint_payload = config_fingerprint_payload or {
+        "periods": periods,
+        "cases": [] if cases is None else list(cases),
+        "output_csv_path": str(output_csv_path),
+        "cache_root": str(cache_root),
+        "shared_state_db_path": str(shared_state_db_path),
+        "results_db_path": resolved_results_db_path,
+        "case_chunk_size": resolved_case_chunk_size,
+        "dry_run": bool(dry_run),
+        "total_cases": resolved_total_cases,
+    }
+    config_fingerprint = build_evaluation_run_config_fingerprint(fingerprint_payload)
 
     if dry_run:
         return _build_dry_run_result(
-            periods=periods,
-            cases=cases,
+            total_periods=total_periods,
+            total_cases=resolved_total_cases,
             output_csv_path=output_csv_path,
             case_chunk_size=resolved_case_chunk_size,
             cache_root=cache_root,
@@ -348,7 +395,7 @@ def run_evaluation_batch(
         config_path=resolved_config_path,
         config_fingerprint=config_fingerprint,
         total_periods=total_periods,
-        total_cases=total_cases,
+        total_cases=resolved_total_cases,
         planned_rows=planned_rows,
         output_csv_path=str(csv_path),
         results_db_path=str(initialized_results_db_path),
@@ -381,7 +428,7 @@ def run_evaluation_batch(
                 )
                 returns_payload = build_returns_payload_from_rows(market_data_result["rows"])
             except Exception as error:
-                for case_chunk in _iter_case_chunks(cases, resolved_case_chunk_size):
+                for case_chunk in _iter_case_chunks(case_iteration_factory(), resolved_case_chunk_size):
                     chunk_rows = [
                         _build_market_data_error_row(
                             period=period,
@@ -408,7 +455,7 @@ def run_evaluation_batch(
                     )
                 continue
 
-            for case_chunk in _iter_prepared_case_chunks(cases, resolved_case_chunk_size):
+            for case_chunk in _iter_prepared_case_chunks(case_iteration_factory(), resolved_case_chunk_size):
                 chunk_rows: list[dict[str, object]] = []
                 for case in case_chunk:
                     try:
@@ -481,7 +528,7 @@ def run_evaluation_batch(
         "config_path": resolved_config_path,
         "config_fingerprint": config_fingerprint,
         "total_periods": total_periods,
-        "total_cases": total_cases,
+        "total_cases": resolved_total_cases,
         "planned_rows": planned_rows,
         "case_chunk_size": resolved_case_chunk_size,
         "total_rows": total_rows,

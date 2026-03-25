@@ -154,7 +154,18 @@ source .venv/bin/activate
 python3 scripts/run_evaluation_batch.py --config config/evaluation_batch.example.json
 ```
 
+periods CSV + case templates + grids から batch runner へ接続する入力 adapter 実行例:
+
+```bash
+source .venv/bin/activate
+python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_input.example.json
+```
+
 batch runner は CSV を維持したまま、結果 DB を追加保存先として持てます。period ごとに market data 解決と returns 生成を 1 回だけ行い、同一 period 配下の case を `case_chunk_size` 単位で流して CSV と SQLite へ逐次保存します。SQLite には run メタ情報と `1 period × 1 case = 1 row` の結果テーブルを保存し、`results_db_path` を省略した場合は `output_csv_path` と同じ場所に `*.sqlite3` を自動生成します。`dry_run: true` にすると fetch / case prepare / CSV 書き込み / DB 書き込みを行わずに、period 数、case 数、想定 row 数、使用 chunk サイズだけを確認できます。中規模 run を行うときは period と case を代表 subset に絞った設定ファイルを別途用意し、同じ実行入口でチャンク挙動と CSV / DB 整合を先に確認できます。
+
+入力 adapter では `periods_csv_path`、`case_templates_json_path`、`grids_csv_path` を使って batch runner の内部表現へ変換します。`periods.csv` は `period_id,source,symbol,interval,start,end` を必須列とし、`grids.csv` は `grid_id,template_name,overrides_json` を必須列とします。生成される case 名は `template_name__grid_id` で固定し、重複が出た場合は実行前にエラーにします。`period_limit` と `case_limit` を使うと dry run や小規模 subset 実行を同じ入口で行えます。
+
+CSV / DB の二重保存は run ごとに append ではなく新しい `run_id` を切る前提です。中断時はその時点までの CSV 行と DB 行を残し、再実行では既存 run を上書きせず新しい run として追跡します。部分再開や旧 run への追記ルールは未実装で、後続タスクで扱います。
 
 ## 手動確認
 
