@@ -4,21 +4,21 @@
 
 1. ネットワーク運用ルールの fix
 2. scale 定義の修正
-3. medium / operational pilot full 実行直前までの config / dry run / 出力先設計の準備
+3. medium actual run の直前までの文書整理
 
 ## Goal
 
 - 外部通信 run の承認と記録ルールを曖昧なままにせず、抽象ルール・常設運用・今回の具体記録を分離して fix する
-- seed/small/medium/operational pilot full/planning full/ceiling full を、現在の実装で runnable なものと planning 上の件数整理に分けて再定義する
-- actual run に入る直前までの config、dry run、出力先設計を揃える
+- seed/small/medium/operational pilot full/current-stack planning/current-stack ceiling/original planning baseline/original ceiling baseline を、current-stack と original planning に分けて再定義する
+- parameter 件数を固定値ではなく「軸 × 刻み方」で説明できるようにする
 
 ## In Scope
 
 - AGENTS / README / task の役割分担を守りつつ、外部通信 run の運用ルールを fix する
-- seed / smoke、small、medium、operational pilot full、planning full、ceiling full を再定義する
-- runnable な medium / operational pilot full 用 config と出力先を準備する
-- medium と operational pilot full の dry run を実行して planned_rows と chunk 数を確認する
-- planning full / ceiling full は件数整理と命名方針だけを残す
+- `seed / smoke`、`small`、`medium`、`operational pilot full`、`current-stack planning`、`current-stack ceiling`、`original planning baseline`、`original ceiling baseline` を再定義する
+- ネットワーク再実行の留保付き事実を整理する
+- original planning baseline の件数根拠を軸 × 刻み方で説明する
+- medium の代表性と operational pilot full の保守性を明文化する
 
 ## Out of Scope
 
@@ -41,21 +41,21 @@
 - 結果は CSV / DB に逐次保存し、途中成果を失わない
 - medium 実行や full 実行はまだ開始しない
 - 外部通信を伴う新しい run は行わない
-- dry run だけを行う
+- dry run の追加も行わない
 
 ## Current Plan
 
 - AGENTS には外部通信 run の抽象ルールだけを追加する
 - README には常設運用と runnable scale の入口説明だけを置く
-- task.md には今回の具体 run 記録欄、留保点、scale 定義、dry run 結果を残す
-- runnable scale は current runner が直接扱える trade-strategy grid で medium と operational pilot full を準備する
-- planning full と ceiling full は original planning numbers として件数整理を残す
+- task.md には今回の具体 run 記録欄、留保点、scale 定義、parameter 件数の根拠を残す
+- current-stack と original planning を分けて整理する
+- `current initial full=32` は seed / smoke 相当であり、本命 full ではないことを明示する
 
 ## Open Questions
 
 - raw candidate periods のうち 2025 系候補をどこまで残すか
 - 部分再開を後続タスクで扱うか、run 単位積み増しを原則に固定するか
-- planning full を raw baseline で保持するか、merged baseline を併記するか
+- original planning baseline の periods を merged 12 固定にするか、10〜14 のレンジとして残すか
 
 ## Risks
 
@@ -87,11 +87,13 @@
 - 通信先は `https://api.binance.com/api/v3/klines` の公開 JSON、HTTP GET、1 period 1 week / 1h では 169 rows だったため成功 run のリクエスト回数は 1 回と推定できる
 - 1 回目失敗時の failure row は `error_code=MarketDataFetchError`、`error_message=failed to fetch klines: [Errno -3] Temporary failure in name resolution` で、実装例外やデータ不備は混ざっていない
 - raw response body 保存は行わず、保存されたのは normalized OHLCV CSV artifact、shared state DB の取得状態、evaluation CSV、evaluation results DB である
-- 本命 full 再定義のための raw candidate periods 案は 14 件、merged periods 案は 11 件とした
-- grid 件数は signal-only 12、minimal tradability 8、extended 384、optional execution 1152 の案を置いた
-- raw periods × grid 件数は signal-only 168、minimal 112、extended 5376、optional 16128 rows である
-- merged periods × grid 件数は signal-only 132、minimal 88、extended 4224、optional 12672 rows である
-- 再定義案として、small は `period_limit=2, case_limit=6, planned_rows=12`、medium は `period_limit=6, case_limit=12, planned_rows=72`、full は merged operational `period_limit=11, case_limit=384, planned_rows=4224`、raw ceiling は `period_limit=14, case_limit=384, planned_rows=5376` とした
+- 直ちに違反確定ではないが、次の external communication actual run 前に運用 fix が必要、という位置づけを明記する
+- raw candidate periods は original planning では `24 件前後`、merged periods は `10〜14 件前後` を baseline とし、current-stack では既存 merged 11 件を conservative な代表値として扱う
+- current initial full=32 rows は seed / smoke 相当であり、本命 full ではない
+- original planning baseline の自然な一例として、`5 × 5 × 3 × 3 × 3 × 3 × 3 × 3` の刻み方から `signal-only ≈ 75 / period`、`minimal ≈ 2025 / period`、`extended ≈ 18225 / period` を説明できる形に整理する
+- merged 12 periods を baseline とした original planning baseline は `signal-only ≈ 900`、`minimal ≈ 24300`、`extended ≈ 218700` と整理する
+- raw 24 periods を baseline とした original ceiling baseline は `signal-only ≈ 1800`、`minimal ≈ 48600`、`extended ≈ 437400` と整理する
+- current-stack 側では、medium は merged periods 全件 × representative 12 cases = 132 rows、operational pilot full は merged periods 全件 × runnable 48 cases = 528 rows、current-stack planning は merged periods 全件 × conservative extended 384 cases = 4224 rows、current-stack ceiling は raw candidate 24 periods 相当に広げると `24 × 384 = 9216 rows` と整理する
 - 運用修正として、外部通信 run は事前承認を必須にし、通信先、取得方式、保存範囲、failure 分類、実行条件変更、承認経路の観測可能範囲を task.md に残す方針へ更新する
 - scale は `seed/smoke`、`small`、`medium`、`operational pilot full`、`planning full`、`ceiling full` に分けて整理する
 - runnable scale は current runner が直接扱える trade-strategy grid で作り、planning / ceiling は original planning numbers として件数整理を分離する
@@ -120,6 +122,7 @@
   - `python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_initial.small.json` は通常 sandbox で DNS 名前解決失敗となった
   - 同じコマンドを `sandbox_permissions=require_escalated` 付きで再実行すると成功した
   - Codex から観測できたのは「通常 sandbox では失敗、escalated 実行では成功」までで、承認 UI の内訳は不明である
+  - 現時点では即違反認定ではないが、次の external communication actual run 前に運用 fix を入れる必要がある
 
 ## Scale Definition
 
@@ -142,7 +145,7 @@
   - 実行条件: seed/smoke 成功後
   - 出力先: `var/evaluation_batch/small_*`
 - `medium`:
-  - 目的: merged periods 全件と representative cases による代表性確認
+  - 目的: merged periods 全件と signal-only full 近傍の representative cases による代表性確認
   - periods: 11
   - cases: 12
   - planned_rows: 132
@@ -159,8 +162,8 @@
   - chunks: 44
   - 実行条件: medium 成功後
   - 出力先: `var/evaluation_batch/operational_pilot_full_*`
-- `planning full`:
-  - 目的: original planning numbers の baseline
+- `current-stack planning`:
+  - 目的: current-stack 上で conservative extended を掛けた planning 値
   - periods: 11 merged periods
   - cases: 384 extended
   - planned_rows: 4224
@@ -168,13 +171,31 @@
   - chunks: 88
   - 実行条件: 直ちに実行しない
   - 出力先: planning 用命名だけ定義
-- `ceiling full`:
-  - 目的: raw candidate periods × original extended の上限計画値
-  - periods: 14 raw periods
+- `current-stack ceiling`:
+  - 目的: current-stack の conservative extended を raw candidate 24 periods 相当まで広げた ceiling
+  - periods: 24 raw candidate periods 相当
   - cases: 384 extended
-  - planned_rows: 5376
+  - planned_rows: 9216
   - case_chunk_size: 50
-  - chunks: 112
+  - chunks: 192
+  - 実行条件: 直ちに実行しない
+  - 出力先: planning 用命名だけ定義
+- `original planning baseline`:
+  - 目的: 元の構想どおり sufficiently fine parameter grid を掛けた baseline
+  - periods: merged periods 10〜14、代表値 12
+  - cases: signal-only ≈ 75 / period、minimal ≈ 2025 / period、extended ≈ 18225 / period
+  - planned_rows: signal-only ≈ 900、minimal ≈ 24300、extended ≈ 218700
+  - case_chunk_size: 50
+  - chunks: signal-only ≈ 24、minimal ≈ 492、extended ≈ 4380
+  - 実行条件: 直ちに実行しない
+  - 出力先: planning 用命名だけ定義
+- `original ceiling baseline`:
+  - 目的: raw candidate periods 側へ広げた元構想の上限計画値
+  - periods: raw candidate periods 前後 24
+  - cases: signal-only ≈ 75 / period、minimal ≈ 2025 / period、extended ≈ 18225 / period
+  - planned_rows: signal-only ≈ 1800、minimal ≈ 48600、extended ≈ 437400
+  - case_chunk_size: 50
+  - chunks: signal-only ≈ 48、minimal ≈ 984、extended ≈ 8760
   - 実行条件: 直ちに実行しない
   - 出力先: planning 用命名だけ定義
 
@@ -187,10 +208,10 @@
 
 ## Next Candidate Tasks
 
-- medium dry run と operational pilot full dry run の結果を確認し、actual run 可否の承認を取る
-- planning full / ceiling full を runnable 化する必要があるかを別タスクで判断する
+- medium actual run 可否の承認を取り、承認後は medium だけを先に実行する
+- current-stack planning / ceiling と original planning baseline / ceiling baseline のどこまでを今後 runnable 化するかを別タスクで判断する
 - 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- ネットワーク運用 fix、scale 定義修正、medium / operational pilot full dry run、出力先設計を確認したうえで、actual run 可否の承認待ちに入る
+- ネットワーク運用 fix、scale 定義修正、parameter 件数根拠の整理を確認したうえで、medium actual run 可否の承認待ちに入る

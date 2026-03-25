@@ -165,7 +165,9 @@ batch runner は CSV を維持したまま、結果 DB を追加保存先とし�
 
 入力 adapter では `periods_csv_path`、`case_templates_json_path`、`grids_csv_path` を使って batch runner の内部表現へ変換します。`periods.csv` は `period_id,source,symbol,interval,start,end` を必須列とし、`grids.csv` は `grid_id,template_name,overrides_json` を必須列とします。生成される case 名は `template_name__grid_id` で固定し、重複が出た場合は実行前にエラーにします。`period_limit` と `case_limit` を使うと dry run や小規模 subset 実行を同じ入口で行えます。
 
-外部通信を伴う run は、公開 JSON / 公開 RSS のみを対象とし、事前承認を必須にします。raw response body は保存しません。実行報告では、通信先、取得方式、保存範囲、failure 分類、実行条件変更の有無、Codex 視点で観測できた承認経路の範囲を残します。具体的な run ごとの記録は `task.md` に置き、README は常設運用ルールだけを持ちます。
+外部通信を伴う actual run は、公開 JSON / 公開 RSS のみを対象とし、事前承認を必須にします。raw response body は保存しません。実行報告では、通信先、取得方式、保存範囲、failure 分類、承認経路の観測可能範囲を残します。具体的な run ごとの記録は `task.md` に置き、README は常設運用ルールだけを持ちます。
+
+市場データの `var/cache/market_data/...` 配下に置く OHLCV CSV artifact は、HTTP response body の生保存ではなく、取得後に `timestamp/open/high/low/close/volume` へ正規化した内部分析用途の cache として扱います。生の JSON body や HTML は保存しません。
 
 CSV / DB の二重保存は run ごとに append ではなく新しい `run_id` を切る前提です。中断時はその時点までの CSV 行と DB 行を残し、再実行では既存 run を上書きせず新しい run として追跡します。部分再開や旧 run への追記ルールは未実装で、後続タスクで扱います。
 
@@ -173,7 +175,7 @@ CSV / DB の二重保存は run ごとに append ではなく新しい `run_id` 
 
 初版の実験入力として [evaluation_batch_initial.periods.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.periods.csv) 、 [evaluation_batch_initial.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.case_templates.json) 、 [evaluation_batch_initial.grids.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.grids.csv) を追加しています。full dry run は [evaluation_batch_initial.full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.full.json) 、小規模実データ run は [evaluation_batch_initial.small.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_initial.small.json) を使います。
 
-実行直前までの runnable scale として、[evaluation_batch_operational.periods.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.periods.csv) と [evaluation_batch_operational.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.case_templates.json) を共通入力にし、medium dry run は [evaluation_batch_operational.medium.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.medium.json) 、operational pilot full dry run は [evaluation_batch_operational.pilot_full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.pilot_full.json) を使います。planning full / ceiling full は、現在の runner が直接扱う trade-strategy grid ではなく planning 用の件数整理として `task.md` に残します。
+実行直前までの runnable scale として、[evaluation_batch_operational.periods.csv](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.periods.csv) と [evaluation_batch_operational.case_templates.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.case_templates.json) を共通入力にし、medium dry run は [evaluation_batch_operational.medium.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.medium.json) 、operational pilot full dry run は [evaluation_batch_operational.pilot_full.json](/home/kuru0101/crypto_simulator/crypto_simulator/config/evaluation_batch_operational.pilot_full.json) を使います。
 
 初版 input の確認コマンド:
 
@@ -188,6 +190,10 @@ python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_b
 同じ `output_csv_path` で再実行した場合、CSV はその run の内容で再生成されます。一方 SQLite は `run_id` 単位で追記されるため、同じ `results_db_path` に複数 run を保持できます。過去 run の CSV を残したい場合は `output_csv_path` を run ごとに分けます。
 
 scale ごとの出力先は分離します。少なくとも `seed_smoke`、`small`、`medium`、`operational_pilot_full` は別の CSV / SQLite path を使い、`planning_full` と `ceiling_full` は件数整理だけに留め、すぐ実行する path と混ぜません。
+
+scale の考え方は 2 系統に分けます。`current-stack` は現行 runner / adapter / conservative current input で今すぐ扱える規模、`original planning` は元の構想どおりに parameter を十分細かく刻んだときの planning 上の規模です。`current initial full=32 rows` は seed / smoke 相当であり、本命 full ではありません。
+
+original planning の件数は固定値を先に置くのではなく、parameter 軸の刻み方から説明します。自然な一例として、`consumption_series_name=5`、`entry_count_threshold=5`、`exit_after_inactive_periods=3`、`take_profit=3`、`stop_loss=3`、`max_hold_minutes=3`、`price_spike_limit=3`、`volume_multiplier=3` と刻むと、`signal-only ≈ 5×5×3 = 75 / period`、`minimal tradability ≈ 75×3×3×3 = 2025 / period`、`extended ≈ 2025×3×3 = 18225 / period` になります。期間側を `raw candidate periods ≈ 24`、`merged periods ≈ 10〜14` とみると、merged 12 件では `signal-only ≈ 900`、`minimal ≈ 24300`、`extended ≈ 218700`、raw 24 件では `signal-only ≈ 1800`、`minimal ≈ 48600`、`extended ≈ 437400` が自然な planning baseline です。
 
 ## 手動確認
 
