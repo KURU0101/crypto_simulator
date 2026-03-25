@@ -2,29 +2,32 @@
 
 ## Current Official Task
 
-1. official scale 名の `small / medium / full` への整理
+1. original planning baseline 側の最初の actual run
 
 ## Goal
 
-- official scale 名を `small / medium / full` の 3 段階に整理し、旧名称を内部呼称へ下げる
-- `medium` が cache-backed validation 実績であること、`full` が reuse + fresh fetch 混在であることを明記する
-- original planning baseline / ceiling baseline を、公式 scale とは別の planning 用概念として保持する
+- original planning baseline の最初の actual run として、merged periods 12 × signal-only 75 = 900 rows を実施する
+- raw candidate 24 と merged 12 の対応関係、および signal-only 75 の軸 × 刻み方を再利用可能な形で残す
+- dry run と actual run の結果を README / task に記録し、次の original 系 run へ進む判断材料を整える
 
 ## In Scope
 
-- README と task の scale 定義を `small / medium / full` 中心へ更新する
-- 旧名称の `seed/smoke`、`operational pilot full`、`current-stack planning`、`current-stack ceiling` は移行期の内部呼称としてだけ残す
-- `current initial full=32` は seed/smoke 相当であり公式 full ではないことを明記する
-- superseded completed runs は partial run と区別して run_id 単位で追跡する前提を明記する
+- original planning baseline 用の raw 24 / merged 12 period 定義を config 配下へ追加する
+- signal-only 75 cases / period の template / grid / config を original 系命名で追加する
+- dry run で `total_periods=12`、`total_cases=75`、`planned_rows=900` を確認し、問題なければ actual run を 1 回だけ行う
+- CSV / DB / run メタ / artifact / reuse / fetch / failure 分類を確認し、README / task に反映する
 
 ## Out of Scope
 
-- OHLCV artifact の全面 DB 化
-- market data shared truth の再設計
-- research manifest との全面統合
+- raw candidate periods 24 を使う actual run
+- minimal tradability の actual run
+- extended の actual run
+- original planning baseline / ceiling baseline の larger run
 - 並列化の本格導入
 - acquisition key 同時実行制御の完成
 - schema version 運用ルールの完成
+- DB 主体運用への最終切替
+- OHLCV artifact の再設計
 - 戦略改善
 - パラメータ最適化
 
@@ -36,21 +39,24 @@
 - case 準備も含めて全件一括メモリ展開しない
 - case_name の一意性を入力展開側で保証する
 - 結果は CSV / DB に逐次保存し、途中成果を失わない
-- 今回は文書整理だけを行い、新しい actual run は行わない
-- original planning baseline / ceiling baseline の actual run は行わない
+- 外部通信 actual run として、通信先 / 取得方式 / 保存範囲 / failure 分類 / 承認経路の観測可能範囲 / run_id を残す
+- dry_run 用 config と actual run 用 config は分ける
+- output_csv_path / results_db_path は current-stack の official scale と共有しない
+- dry run が `planned_rows=900` にならない場合は actual run しない
 - 既存の run 記録は run_id 単位で保持し、superseded completed run と partial run を混同しない
 
 ## Current Plan
 
-- README に official scale の定義と旧名称の位置づけを反映する
-- task.md に公式 scale と内部呼称の対応、medium/full の注記、planning 用概念の位置づけを反映する
-- project_context.md は今回の目的に十分な情報が README / task に入るため、原則変更しない
+- original planning baseline 用の merged periods 12 を raw 24 からの対応付きで具体化する
+- signal-only 75 cases / period の template / grid / config を original 系命名で作る
+- dry run で `12 periods × 75 cases = 900 rows` を確認し、成立した場合のみ actual run を 1 回行う
+- README / task に merged 12 定義、raw 24 との対応、signal-only 75 の軸 × 刻み方、dry run 結果、actual run 結果、reuse / fetch 内訳を追記する
 
 ## Open Questions
 
-- raw candidate periods のうち 2025 系候補をどこまで残すか
-- 部分再開を後続タスクで扱うか、run 単位積み増しを原則に固定するか
-- original planning baseline の periods を merged 12 固定にするか、10〜14 のレンジとして残すか
+- original planning baseline の次段を minimal tradability にするか、raw periods × signal-only にするか
+- original planning baseline でも merged period の定義を今後固定するか、候補差し替え余地を残すか
+- original 系 run の次段で fresh fetch 比率をどの程度重視するか
 
 ## Risks
 
@@ -58,6 +64,8 @@
 - 通信許可の承認経路は Codex から完全には観測できない
 - case_name 一意性が崩れると CSV / DB の追跡が曖昧になる
 - 中断時と再実行時の扱いが曖昧だと run 単位分析が難しくなる
+- original planning baseline の external-signal case は summary 定義との差異があると prepare 時点で失敗する
+- original 系の series 名が feature 側の許容集合とずれると、grid が成立していても actual run で失敗する
 
 ## Progress / Done
 
@@ -138,6 +146,50 @@
 - current-stack ceiling 用 CSV / DB は実行前には存在せず partial run 残留はなかった
 - current-stack ceiling 用 SQLite には、latest run の前に `20260325T081535Z_98fcda3c` と `20260325T081607Z_d760f224` の completed run が残っているが、いずれも中断 partial ではなく superseded completed run である
 - current-stack ceiling latest run の開始から終了までは約 8.65 秒で、9216 row 規模でも reuse 4224 / fetch 4992 の混在で完走した
+- original planning baseline 用に `config/original_planning_baseline.raw_candidates.csv`、`config/original_planning_baseline.raw_to_merged.csv`、`config/original_planning_baseline.merged_periods.csv` を追加し、raw 24 と merged 12 の対応関係と merge 理由を再利用可能な形で整理した
+- original planning signal-only 用に `config/original_planning_signal_only.case_templates.json`、`config/original_planning_signal_only.grids.csv`、`config/original_planning_signal_only.dry_run.json`、`config/original_planning_signal_only.actual.json` を追加した
+- signal-only 75 は `consumption_series_name=5`、`entry_count_threshold=5`、`exit_after_inactive_periods=3` の軸 × 刻み方で定義し、`5 × 5 × 3 = 75 cases / period` とした
+- batch runner に external-signal case の period ごと prepare 導線を追加し、return timestamps と保存済み summary を使って `prepare_external_signal_manual_case()` を呼べるようにした
+- external signal feature の許容 series 名に `matching_signal_count` を追加し、original signal-only baseline の 5 series を受けられるようにした
+- `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_signal_only.dry_run.json` を実行し、`total_periods=12`、`total_cases=75`、`planned_rows=900`、`case_chunk_size=25` を確認した
+- initial actual run `run_id=20260325T181438Z_51157164` は `matching_signal_count` 未許容と例外経路不備のため failed になり、SQLite に superseded failed run record が残った
+- 修正後の actual run `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_signal_only.actual.json` は `run_id=20260325T181535Z_d3b84d67`、`planned_rows=900`、`total_rows=900`、`succeeded_rows=900`、`failed_rows=0` で completed した
+- latest original planning signal-only run の CSV は `var/evaluation_batch/original_planning_signal_only_results.csv`、SQLite は `var/evaluation_batch/original_planning_signal_only_results.sqlite3` で、ともに 900 row を保持し、run メタも `planned_rows=900`、`succeeded_rows=900`、`failed_rows=0` で一致した
+- latest original planning signal-only run では 12 period すべてで 75 row ずつ生成され、artifact path は 12 個で period ごとに 1 個だった
+- latest original planning signal-only run の row 内訳は `reused_existing_artifact=True = 225`、`fetched=True = 675` で、current-stack ceiling と window が一致する 3 merged periods は cross-run reuse、残り 9 periods は fresh fetch だった
+- original planning signal-only latest run では network 制約由来の failure は発生せず、通信先は `https://api.binance.com/api/v3/klines`、取得方式は公開 JSON の HTTP GET だった
+- original planning signal-only latest run の開始から終了までは約 2.15 秒で、900 row 規模でも reuse と fresh fetch が混在したまま完走した
+
+## Original Planning Baseline Run
+
+- merged periods 12:
+  - 定義ファイルは `config/original_planning_baseline.merged_periods.csv`
+  - raw candidate 24 は `config/original_planning_baseline.raw_candidates.csv`
+  - raw 24 と merged 12 の対応は `config/original_planning_baseline.raw_to_merged.csv`
+  - merged period は `period_id,source,symbol,interval,start,end` に加え、`short_name`、`merge_reason`、`raw_period_ids` を持つ
+- raw 24 と merged 12 の対応方針:
+  - 近接する event window を overlap_group ベースでまとめる
+  - 規制 / ETF / price discovery / macro shock のように近接イベントが同一ボラティリティ局面を構成する場合は merged に吸収する
+  - raw 側の event 単位記録は保持しつつ、actual run は merged 側 12 periods を使う
+- signal-only 75:
+  - `consumption_series_name`: `matching_signal_count`、`weighted_matching_signal_count`、`blended_signal_count_s07_t03`、`blended_signal_count_s05_t05`、`blended_signal_count_s03_t07`
+  - `entry_count_threshold`: `1.0`、`1.2`、`1.4`、`1.6`、`1.8`
+  - `exit_after_inactive_periods`: `1`、`2`、`3`
+  - 上記 3 軸だけを展開し、`5 × 5 × 3 = 75 cases / period`
+  - `take_profit`、`stop_loss`、`max_hold_minutes`、`price_spike_limit`、`volume_multiplier` は original planning baseline の parameter 軸として残すが、この run では展開しない
+- dry run:
+  - config: `config/original_planning_signal_only.dry_run.json`
+  - 結果: `total_periods=12`、`total_cases=75`、`planned_rows=900`、`case_chunk_size=25`
+- actual run:
+  - config: `config/original_planning_signal_only.actual.json`
+  - latest run_id: `20260325T181535Z_d3b84d67`
+  - status: `completed`
+  - `planned_rows=900`、`total_rows=900`、`succeeded_rows=900`、`failed_rows=0`
+  - 保存先: `var/evaluation_batch/original_planning_signal_only_results.csv`、`var/evaluation_batch/original_planning_signal_only_results.sqlite3`
+- superseded failed run:
+  - run_id: `20260325T181438Z_51157164`
+  - 種別: latest run の partial 残留ではなく、修正前実装による superseded failed run record
+  - 原因: `matching_signal_count` 未許容と、case prepare 失敗時の例外経路不備
 
 ## Network Run Recording
 
@@ -177,6 +229,13 @@
   - 取得方式は公開 JSON の HTTP GET で、Codex から確認できた承認事実は「escalated 実行としてコマンドが実行できた」までで、承認 UI の内訳は不明である
   - 保存先は `var/evaluation_batch/current_stack_ceiling_results.csv`、`var/evaluation_batch/current_stack_ceiling_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
   - raw body 保存は行っておらず、failure 分類は今回の current-stack ceiling latest run では該当なし、run status は `completed` である
+  - original planning signal-only dry run では `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_signal_only.dry_run.json` を実行し、`total_periods=12`、`total_cases=75`、`planned_rows=900` を確認した
+  - original planning signal-only actual run では `python3 scripts/run_evaluation_batch_from_inputs.py --config config/original_planning_signal_only.actual.json` を `sandbox_permissions=require_escalated` で実行した
+  - original planning signal-only actual run の latest config path は `config/original_planning_signal_only.actual.json`、latest run_id は `20260325T181535Z_d3b84d67`、通信先は `https://api.binance.com/api/v3/klines`、domain は `api.binance.com` である
+  - 取得方式は公開 JSON の HTTP GET で、Codex から確認できた承認事実は「escalated 実行としてコマンドが実行できた」までで、承認 UI の内訳は不明である
+  - 保存先は `var/evaluation_batch/original_planning_signal_only_results.csv`、`var/evaluation_batch/original_planning_signal_only_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
+  - raw body 保存は行っておらず、latest run の failure 分類は該当なし、run status は `completed` である
+  - 先行 failed run `20260325T181438Z_51157164` は implementation mismatch で、`matching_signal_count` 未許容と例外経路不備が原因だった
 
 ## Official Scale Definition
 
@@ -253,10 +312,10 @@
 
 ## Next Candidate Tasks
 
-- official scale 名の整理を確認し、必要なら README / task 上の旧呼称の露出をさらに減らす
-- original planning baseline / ceiling baseline を actual run するかどうかは別タスクで判断する
-- 必要なら builder / manifest との限定的な接続を再評価する
+- original planning baseline の次段として、raw 24 × signal-only へ広げるか、merged 12 × minimal tradability へ進むかを判断する
+- original planning baseline の merged 12 定義をこのまま固定するか、後続候補入れ替え余地を残すかを判断する
+- 必要なら external-signal summary root の複数系統対応を再評価する
 
 ## Next Approval Gate
 
-- official scale 名の `small / medium / full` への整理内容を確認したうえで、次タスクを承認待ちにする
+- original planning baseline 側の最初の actual run 結果を確認したうえで、次に raw 24 × signal-only へ進むか、merged 12 × minimal tradability へ進むかの承認待ちにする

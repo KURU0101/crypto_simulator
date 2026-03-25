@@ -1,0 +1,25 @@
+raw_period_id,merged_period_id,merge_reason
+raw_2023q1_silvergate_stress,merged_2023q1_bank_stress,Pre-SVB banking stress is part of the same liquidity shock cluster.
+raw_2023q1_svb_usdc_depeg,merged_2023q1_bank_stress,Peak banking-stress and stablecoin depeg window merged into one shock period.
+raw_2023q2_blackrock_filing,merged_2023q2_etf_reg,ETF narrative acceleration belongs in the same regulatory repricing cluster.
+raw_2023q2_etf_followthrough,merged_2023q2_etf_reg,Followthrough price discovery remains in the same ETF-regulation narrative window.
+raw_2023q3_ripple_win,merged_2023q3_ripple_followthrough,Court-ruling impulse and its immediate reaction belong to the same event window.
+raw_2023q3_ripple_followthrough,merged_2023q3_ripple_followthrough,Post-ruling repricing extends the same legal-event period.
+raw_2023q4_binance_settlement,merged_2023q4_exchange_reg,Exchange-regulation repricing is treated as one merged period.
+raw_2023q4_post_settlement,merged_2023q4_exchange_reg,Immediate followthrough after settlement stays in the same exchange-regulation window.
+raw_2024q1_etf_approval,merged_2024q1_etf_cycle,ETF approval and launch-phase repricing are merged into one cycle.
+raw_2024q1_post_approval,merged_2024q1_etf_cycle,Post-approval ETF flow remains within the same ETF cycle.
+raw_2024q1_ath_breakout,merged_2024q1_price_discovery,Breakout and subsequent price discovery form one merged momentum window.
+raw_2024q1_ath_followthrough,merged_2024q1_price_discovery,ATH followthrough is absorbed into the same price-discovery cluster.
+raw_2024q2_halving,merged_2024q2_halving_etf,Halving and ETF cross-currents are merged into one Q2 event block.
+raw_2024q2_hk_etf,merged_2024q2_halving_etf,HK ETF launch overlaps the halving repricing window and is merged with it.
+raw_2024q3_yen_carry_unwind,merged_2024q3_macro_liquidation,Macro liquidation and its recovery are treated as one merged shock window.
+raw_2024q3_post_liquidation,merged_2024q3_macro_liquidation,Rebound remains in the same macro-liquidation event block.
+raw_2024q3_fed_cut,merged_2024q3_macro_policy,Policy shift and immediate repricing are merged into one macro-policy period.
+raw_2024q3_post_cut,merged_2024q3_macro_policy,Post-cut continuation belongs to the same macro-policy repricing window.
+raw_2024q4_us_election,merged_2024q4_us_policy,Election and post-election crypto repricing are merged into one policy window.
+raw_2024q4_btc_above_100k,merged_2024q4_us_policy,100k break occurs inside the same late-2024 US-policy / momentum cluster.
+raw_2025q1_inauguration,merged_2025q1_us_policy,Inauguration and immediate policy repricing are one merged 2025Q1 window.
+raw_2025q1_post_inauguration,merged_2025q1_us_policy,Followthrough after inauguration stays in the same policy window.
+raw_2025q2_tariff_shock,merged_2025q2_macro_trade,Trade-policy repricing begins with the tariff shock and is merged with the immediate aftershock.
+raw_2025q2_post_tariff,merged_2025q2_macro_trade,Post-shock repricing remains in the same macro-trade window.

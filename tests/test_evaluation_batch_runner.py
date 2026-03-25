@@ -43,6 +43,25 @@ def _threshold_case(name: str) -> dict[str, object]:
     }
 
 
+def _external_signal_case(name: str, *, consumption_series_name: str = "weighted_matching_signal_count") -> dict[str, object]:
+    external_signal: dict[str, object] = {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": ["policy"],
+        "consumption_series_name": consumption_series_name,
+        "entry_count_threshold": 1.0,
+        "exit_after_inactive_periods": 1,
+    }
+    if consumption_series_name == "blended_weighted_signal_count":
+        external_signal["blended_weights"] = {"symbol": 0.7, "topic": 0.3}
+    return {
+        "name": name,
+        "initial_cash": 1000,
+        "fee_rate": 0.0,
+        "slippage_rate": 0.0,
+        "external_signal": external_signal,
+    }
+
+
 def _period(period_id: str, start: str, end: str) -> dict[str, str]:
     return {
         "period_id": period_id,
@@ -206,6 +225,46 @@ def test_run_evaluation_batch_prepares_cases_per_chunk_instead_of_all_at_once(
     assert result["case_chunk_size"] == 2
     assert prepared_count == 5
     assert prepared_counts_at_append == [2, 4, 5]
+
+
+def test_run_evaluation_batch_prepares_external_signal_cases_per_period(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    scan_calls: list[str] = []
+
+    def fake_scan_saved_signal_summaries(root_dir: str) -> list[dict[str, object]]:
+        scan_calls.append(root_dir)
+        return [
+            {
+                "status": "completed",
+                "ended_at": "2024-01-01T01:30:00Z",
+                "symbol_distribution": {"BTCUSDT": 1},
+                "topic_distribution": {"policy": 1},
+            }
+        ]
+
+    monkeypatch.setattr(
+        "trade_simulator.evaluation_batch_runner.scan_saved_signal_summaries",
+        fake_scan_saved_signal_summaries,
+    )
+
+    csv_path = tmp_path / "results.csv"
+    result = run_evaluation_batch(
+        periods=[_period("p1", "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z")],
+        cases=[
+            _external_signal_case("signal_matching", consumption_series_name="matching_signal_count"),
+            _external_signal_case("signal_blended", consumption_series_name="blended_weighted_signal_count"),
+        ],
+        output_csv_path=csv_path,
+        cache_root=tmp_path / "cache",
+        shared_state_db_path=tmp_path / "shared_state.sqlite3",
+        fetcher=lambda **kwargs: _sample_rows_a(),
+    )
+
+    assert result["total_rows"] == 2
+    assert result["succeeded_rows"] == 2
+    assert scan_calls == ["data/external_signal_compare"]
+    rows = _read_csv_rows(csv_path)
+    assert len(rows) == 2
+    assert all(row["status"] == "completed" for row in rows)
 
 
 def test_run_evaluation_batch_keeps_running_when_one_case_fails(tmp_path: Path) -> None:

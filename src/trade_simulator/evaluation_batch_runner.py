@@ -19,11 +19,13 @@ from trade_simulator.evaluation_market_data import (
     build_market_data_acquisition_key,
     resolve_evaluation_market_data,
 )
+from trade_simulator.external_signal_features import prepare_external_signal_manual_case
 from trade_simulator.evaluation_runner import (
     build_returns_payload_from_rows,
     evaluate_prepared_case_with_returns,
     prepare_single_case,
 )
+from trade_simulator.integrated_observer import scan_saved_signal_summaries
 
 
 DEFAULT_CASE_CHUNK_SIZE = 100
@@ -280,6 +282,33 @@ def _iter_prepared_case_chunks(cases: object, case_chunk_size: int):
         yield [prepare_single_case(case) for case in case_chunk]
 
 
+def _prepare_case_for_period(
+    *,
+    case_config: dict[str, object],
+    returns_payload: dict[str, object],
+    period: dict[str, str],
+    summaries_by_root_dir: dict[str, list[dict]],
+) -> dict[str, object]:
+    prepared_case = prepare_single_case(case_config)
+    external_signal = prepared_case.get("external_signal")
+    if not isinstance(external_signal, dict):
+        return prepared_case
+
+    summary_root_dir = external_signal.get("summary_root_dir", "var")
+    if not isinstance(summary_root_dir, str) or not summary_root_dir.strip():
+        raise TypeError("external_signal summary_root_dir must be a non-empty string")
+
+    if summary_root_dir not in summaries_by_root_dir:
+        summaries_by_root_dir[summary_root_dir] = scan_saved_signal_summaries(summary_root_dir)
+
+    return prepare_external_signal_manual_case(
+        prepared_case,
+        return_timestamps=list(returns_payload.get("return_timestamps", [])),
+        symbol=period["symbol"],
+        summaries=summaries_by_root_dir[summary_root_dir],
+    )
+
+
 def _resolve_case_iteration(
     *,
     cases: object | None,
@@ -404,6 +433,7 @@ def run_evaluation_batch(
     total_rows = 0
     failed_rows = 0
     succeeded_rows = 0
+    summaries_by_root_dir: dict[str, list[dict]] = {}
 
     try:
         for period in periods:
@@ -455,10 +485,16 @@ def run_evaluation_batch(
                     )
                 continue
 
-            for case_chunk in _iter_prepared_case_chunks(case_iteration_factory(), resolved_case_chunk_size):
+            for case_chunk in _iter_case_chunks(case_iteration_factory(), resolved_case_chunk_size):
                 chunk_rows: list[dict[str, object]] = []
-                for case in case_chunk:
+                for case_config in case_chunk:
                     try:
+                        case = _prepare_case_for_period(
+                            case_config=case_config,
+                            returns_payload=returns_payload,
+                            period=period,
+                            summaries_by_root_dir=summaries_by_root_dir,
+                        )
                         case_result = evaluate_prepared_case_with_returns(
                             prepared_case=case,
                             returns_payload=returns_payload,
@@ -469,7 +505,7 @@ def run_evaluation_batch(
                                 period=period,
                                 market_data_result=market_data_result,
                                 returns_payload=returns_payload,
-                                case_name=str(case["name"]),
+                                case_name=str(case_config["name"]),
                                 error=error,
                             )
                         )

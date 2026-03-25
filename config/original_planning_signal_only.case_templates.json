@@ -1,0 +1,99 @@
+[
+  {
+    "template_name": "matching_signal_count",
+    "case": {
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": [
+          "policy"
+        ],
+        "consumption_series_name": "matching_signal_count",
+        "entry_count_threshold": 1.0,
+        "exit_after_inactive_periods": 1
+      }
+    }
+  },
+  {
+    "template_name": "weighted_matching_signal_count",
+    "case": {
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": [
+          "policy"
+        ],
+        "consumption_series_name": "weighted_matching_signal_count",
+        "entry_count_threshold": 1.0,
+        "exit_after_inactive_periods": 1
+      }
+    }
+  },
+  {
+    "template_name": "blended_signal_count_s07_t03",
+    "case": {
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": [
+          "policy"
+        ],
+        "consumption_series_name": "blended_weighted_signal_count",
+        "entry_count_threshold": 1.0,
+        "exit_after_inactive_periods": 1,
+        "blended_weights": {
+          "symbol": 0.7,
+          "topic": 0.3
+        }
+      }
+    }
+  },
+  {
+    "template_name": "blended_signal_count_s05_t05",
+    "case": {
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": [
+          "policy"
+        ],
+        "consumption_series_name": "blended_weighted_signal_count",
+        "entry_count_threshold": 1.0,
+        "exit_after_inactive_periods": 1,
+        "blended_weights": {
+          "symbol": 0.5,
+          "topic": 0.5
+        }
+      }
+    }
+  },
+  {
+    "template_name": "blended_signal_count_s03_t07",
+    "case": {
+      "initial_cash": 100000,
+      "fee_rate": 0.0,
+      "slippage_rate": 0.0,
+      "external_signal": {
+        "summary_root_dir": "data/external_signal_compare",
+        "topics": [
+          "policy"
+        ],
+        "consumption_series_name": "blended_weighted_signal_count",
+        "entry_count_threshold": 1.0,
+        "exit_after_inactive_periods": 1,
+        "blended_weights": {
+          "symbol": 0.3,
+          "topic": 0.7
+        }
+      }
+    }
+  }
+]
