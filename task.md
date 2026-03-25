@@ -43,7 +43,8 @@
 - ステップ1:
   - batch 実行の入力展開を period 単位 / case チャンク単位へ寄せる
   - period ごとに market data 解決と returns 生成を 1 回だけ行う
-  - case 実行は既存 runner から切り出した helper を再利用し、結果は逐次保存する
+  - case 実行は既存 runner から切り出した helper を再利用し、結果は CSV 主保存で逐次保存する
+  - `case_chunk_size` を設定可能にし、`dry_run` で fetch なしの実行計画確認をできるようにする
 - ステップ2:
   - 結果保存用の SQLite を追加する
   - run 単位メタ情報と `1 period × 1 case` 行を保存する
@@ -51,7 +52,6 @@
 
 ## Open Questions
 
-- case チャンクサイズを固定値にするか設定値にするか
 - CSV を主保存に残すか、DB を主保存にして CSV を副出力にするか
 - result テーブルの一意性を `run_id + period_id + case_name` にするか、別の case 識別子を導入するか
 - 再実行時に新しい `run_id` で積み増すだけにするか、部分再開も考慮するか
@@ -71,22 +71,22 @@
 - batch runner は `1 period × 1 case = 1 row` の CSV を出力し、最小 JSON summary を返す
 - 正式タスク 2 件にスコープを限定した
 - 本時点では、文書責務を `AGENTS.md` / `project_context.md` / `task.md` に再整理した
+- ステップ1として、period 単位処理、設定可能な case chunk 処理、CSV 逐次保存、`dry_run` を batch runner に追加した
+- ステップ1の README / config example / テストを更新した
 
 ## Not Yet Implemented
 
-- 大量ケース向けの period 単位 / case チャンク単位の逐次実行入口
 - 結果テーブルの DB 保存
 - DB 主体運用時の CSV との最終的な役割整理
 - 部分再開方針
 
 ## Next Candidate Tasks
 
-- ステップ1として、全件一括メモリ展開を避ける batch 実行入口を実装する
 - ステップ2として、結果 DB を追加し、逐次保存へ切り替える
 - 必要なら、ステップ1完了後に保存形式の主従関係を明確化する
 
 ## Next Approval Gate
 
 - 現在の公式タスクは上記 2 件のままとする
-- 次の承認待ちは、文書整理後に提示する実装・実行計画の承認である
-- この承認を得るまでは、runner 改修や DB 実装には着手しない
+- 次の承認待ちは、ステップ1実装結果の確認後にステップ2へ進む承認である
+- ステップ2承認までは、結果 DB 化には着手しない

@@ -151,8 +151,10 @@ python3 scripts/run_evaluation_case.py --source binance_spot --symbol BTCUSDT --
 
 ```bash
 source .venv/bin/activate
-python3 scripts/run_evaluation_batch.py --config path/to/batch_evaluation.json
+python3 scripts/run_evaluation_batch.py --config config/evaluation_batch.example.json
 ```
+
+batch runner はステップ1時点では CSV を主保存に維持しつつ、period ごとに market data 解決と returns 生成を 1 回だけ行い、同一 period 配下の case を `case_chunk_size` 単位で流して CSV へ逐次追記します。`case_chunk_size` は設定可能で、`dry_run: true` にすると fetch / 実行 / CSV 書き込みを行わずに、period 数、case 数、想定 row 数、使用 chunk サイズだけを確認できます。中規模 run を行うときは period と case を代表 subset に絞った設定ファイルを別途用意し、同じ実行入口でチャンク挙動を先に確認できます。
 
 ## 手動確認
 

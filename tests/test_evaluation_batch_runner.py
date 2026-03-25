@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from trade_simulator.evaluation_batch_runner import (
+    DEFAULT_CASE_CHUNK_SIZE,
     EVALUATION_BATCH_RESULT_COLUMNS,
     load_evaluation_batch_config,
     run_evaluation_batch,
@@ -86,6 +87,7 @@ def test_run_evaluation_batch_runs_two_periods_and_multiple_cases(tmp_path: Path
     ]
     assert result["total_periods"] == 2
     assert result["total_cases"] == 2
+    assert result["case_chunk_size"] == DEFAULT_CASE_CHUNK_SIZE
     assert result["total_rows"] == 4
     assert result["succeeded_rows"] == 4
     rows = _read_csv_rows(csv_path)
@@ -116,6 +118,44 @@ def test_run_evaluation_batch_reuses_market_data_within_same_period(tmp_path: Pa
     rows = _read_csv_rows(csv_path)
     assert all(row["returns_count"] == "2" for row in rows)
     assert all(row["price_basis"] == "close_to_close" for row in rows)
+
+
+def test_run_evaluation_batch_appends_rows_per_case_chunk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    appended_chunk_sizes: list[int] = []
+    from trade_simulator import evaluation_batch_runner as batch_runner_module
+
+    original_append_csv_rows = batch_runner_module._append_csv_rows
+
+    def recording_append_csv_rows(output_csv_path, rows):
+        appended_chunk_sizes.append(len(rows))
+        return original_append_csv_rows(output_csv_path, rows)
+
+    monkeypatch.setattr(
+        "trade_simulator.evaluation_batch_runner._append_csv_rows",
+        recording_append_csv_rows,
+    )
+
+    csv_path = tmp_path / "results.csv"
+    result = run_evaluation_batch(
+        periods=[_period("p1", "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z")],
+        cases=[
+            _threshold_case("case_a"),
+            _threshold_case("case_b"),
+            _threshold_case("case_c"),
+            _threshold_case("case_d"),
+            _threshold_case("case_e"),
+        ],
+        output_csv_path=csv_path,
+        cache_root=tmp_path / "cache",
+        shared_state_db_path=tmp_path / "shared_state.sqlite3",
+        case_chunk_size=2,
+        fetcher=lambda **kwargs: _sample_rows_a(),
+    )
+
+    assert result["case_chunk_size"] == 2
+    assert appended_chunk_sizes == [2, 2, 1]
+    rows = _read_csv_rows(csv_path)
+    assert len(rows) == 5
 
 
 def test_run_evaluation_batch_keeps_running_when_one_case_fails(tmp_path: Path) -> None:
@@ -216,6 +256,33 @@ def test_run_evaluation_batch_supports_multiple_periods_single_case_boundary(tmp
     assert result["total_rows"] == 2
 
 
+def test_run_evaluation_batch_dry_run_skips_fetch_and_csv_write(tmp_path: Path) -> None:
+    fetch_count = 0
+
+    def fetcher(**kwargs):
+        nonlocal fetch_count
+        fetch_count += 1
+        return _sample_rows_a()
+
+    csv_path = tmp_path / "results.csv"
+    result = run_evaluation_batch(
+        periods=[_period("p1", "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z")],
+        cases=[_threshold_case("case_a"), _threshold_case("case_b")],
+        output_csv_path=csv_path,
+        cache_root=tmp_path / "cache",
+        shared_state_db_path=tmp_path / "shared_state.sqlite3",
+        case_chunk_size=3,
+        dry_run=True,
+        fetcher=fetcher,
+    )
+
+    assert fetch_count == 0
+    assert result["dry_run"] is True
+    assert result["planned_rows"] == 2
+    assert result["case_chunk_size"] == 3
+    assert not csv_path.exists()
+
+
 def test_load_evaluation_batch_config_reads_minimal_shape() -> None:
     loaded = load_evaluation_batch_config(
         {
@@ -228,6 +295,35 @@ def test_load_evaluation_batch_config_reads_minimal_shape() -> None:
     assert loaded["output_csv_path"] == "var/results.csv"
     assert loaded["periods"][0]["period_id"] == "p1"
     assert loaded["cases"][0]["name"] == "case_a"
+    assert loaded["case_chunk_size"] == DEFAULT_CASE_CHUNK_SIZE
+    assert loaded["dry_run"] is False
+
+
+def test_load_evaluation_batch_config_reads_chunk_size_and_dry_run() -> None:
+    loaded = load_evaluation_batch_config(
+        {
+            "periods": [_period("p1", "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z")],
+            "cases": [_threshold_case("case_a")],
+            "output_csv_path": "var/results.csv",
+            "case_chunk_size": 25,
+            "dry_run": True,
+        }
+    )
+
+    assert loaded["case_chunk_size"] == 25
+    assert loaded["dry_run"] is True
+
+
+def test_load_evaluation_batch_config_rejects_invalid_case_chunk_size() -> None:
+    with pytest.raises(ValueError, match="case_chunk_size must be a positive int"):
+        load_evaluation_batch_config(
+            {
+                "periods": [_period("p1", "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z")],
+                "cases": [_threshold_case("case_a")],
+                "output_csv_path": "var/results.csv",
+                "case_chunk_size": 0,
+            }
+        )
 
 
 def test_evaluation_batch_runner_cli_prints_summary_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -247,6 +343,7 @@ def test_evaluation_batch_runner_cli_prints_summary_json(tmp_path: Path, monkeyp
         lambda **kwargs: {
             "total_periods": 1,
             "total_cases": 1,
+            "case_chunk_size": DEFAULT_CASE_CHUNK_SIZE,
             "total_rows": 1,
             "succeeded_rows": 1,
             "failed_rows": 0,

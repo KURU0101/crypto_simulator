@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
         output_csv_path=batch_config["output_csv_path"],
         cache_root=batch_config["cache_root"],
         shared_state_db_path=batch_config["shared_state_db_path"],
+        case_chunk_size=batch_config["case_chunk_size"],
+        dry_run=batch_config["dry_run"],
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
