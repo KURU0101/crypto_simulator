@@ -167,7 +167,7 @@ batch runner は CSV を維持したまま、結果 DB を追加保存先とし�
 
 外部通信を伴う actual run は、公開 JSON / 公開 RSS のみを対象とし、事前承認を必須にします。raw response body は保存しません。実行報告では、通信先、取得方式、保存範囲、failure 分類、承認経路の観測可能範囲を残します。具体的な run ごとの記録は `task.md` に置き、README は常設運用ルールだけを持ちます。
 
-市場データの `var/cache/market_data/...` 配下に置く OHLCV CSV artifact は、HTTP response body の生保存ではなく、取得後に `timestamp/open/high/low/close/volume` へ正規化した内部分析用途の cache として扱います。生の JSON body や HTML は保存しません。
+市場データの `var/cache/market_data/...` 配下に置く OHLCV CSV artifact は、HTTP response body の生保存ではなく、取得後に `timestamp/open/high/low/close/volume` へ正規化した内部分析用途の cache として扱います。生の JSON body や HTML は保存しません。この cache は内部分析用途に限定して保持し、外部配布や再配布には使いません。
 
 CSV / DB の二重保存は run ごとに append ではなく新しい `run_id` を切る前提です。中断時はその時点までの CSV 行と DB 行を残し、再実行では既存 run を上書きせず新しい run として追跡します。部分再開や旧 run への追記ルールは未実装で、後続タスクで扱います。
 

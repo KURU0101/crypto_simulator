@@ -2,23 +2,20 @@
 
 ## Current Official Task
 
-1. ネットワーク運用ルールの fix
-2. scale 定義の修正
-3. medium actual run の直前までの文書整理
+1. medium actual run の実行計画と実行
 
 ## Goal
 
-- 外部通信 run の承認と記録ルールを曖昧なままにせず、抽象ルール・常設運用・今回の具体記録を分離して fix する
-- seed/small/medium/operational pilot full/current-stack planning/current-stack ceiling/original planning baseline/original ceiling baseline を、current-stack と original planning に分けて再定義する
-- parameter 件数を固定値ではなく「軸 × 刻み方」で説明できるようにする
+- medium actual run を再現可能な形で実行し、CSV / DB / run メタ / artifact / reuse 挙動を確認する
+- 外部通信 run の承認と記録ルールに沿って、実行条件・通信先・保存範囲・failure 分類を task.md に残す
+- 次の actual run 判断に向けて、medium の結果を current-stack scale 定義に結び付ける
 
 ## In Scope
 
-- AGENTS / README / task の役割分担を守りつつ、外部通信 run の運用ルールを fix する
-- `seed / smoke`、`small`、`medium`、`operational pilot full`、`current-stack planning`、`current-stack ceiling`、`original planning baseline`、`original ceiling baseline` を再定義する
-- ネットワーク再実行の留保付き事実を整理する
-- original planning baseline の件数根拠を軸 × 刻み方で説明する
-- medium の代表性と operational pilot full の保守性を明文化する
+- medium actual run を `config/evaluation_batch_operational.medium.json` で実行する
+- 実行結果の CSV / DB 整合、run メタ、artifact 生成、period 単位 reuse を確認する
+- 通信先、取得方式、実行条件変更、保存先、failure 分類、run_id を具体記録として残す
+- 次の actual run 候補を medium 結果に基づいて整理する
 
 ## Out of Scope
 
@@ -39,17 +36,16 @@
 - case 準備も含めて全件一括メモリ展開しない
 - case_name の一意性を入力展開側で保証する
 - 結果は CSV / DB に逐次保存し、途中成果を失わない
-- medium 実行や full 実行はまだ開始しない
-- 外部通信を伴う新しい run は行わない
-- dry run の追加も行わない
+- 今回 actual run の対象は medium だけに限定する
+- operational pilot full 以降の actual run は行わない
+- 外部通信 actual run は事前承認済みコマンドだけを使う
 
 ## Current Plan
 
-- AGENTS には外部通信 run の抽象ルールだけを追加する
-- README には常設運用と runnable scale の入口説明だけを置く
-- task.md には今回の具体 run 記録欄、留保点、scale 定義、parameter 件数の根拠を残す
-- current-stack と original planning を分けて整理する
-- `current initial full=32` は seed / smoke 相当であり、本命 full ではないことを明示する
+- `config/evaluation_batch_operational.medium.json` を actual run 用に切り替えて medium を 1 回だけ実行する
+- 実行後に CSV / DB / run メタ / artifact / fetched/reused を確認する
+- task.md に実行コマンド、run_id、通信先、保存先、failure 分類、結果件数を残す
+- 次の actual run 候補を medium の結果に基づいて絞る
 
 ## Open Questions
 
@@ -104,6 +100,14 @@
 - medium dry run は `total_periods=11`、`total_cases=12`、`planned_rows=132`、`case_chunk_size=6`、想定 chunks `22` を確認した
 - operational pilot full dry run は `total_periods=11`、`total_cases=48`、`planned_rows=528`、`case_chunk_size=12`、想定 chunks `44` を確認した
 - planning full は merged periods × original extended = `4224 rows`、ceiling full は raw periods × original extended = `5376 rows` の件数整理に留め、今回 runnable config にはしなかった
+- `config/evaluation_batch_operational.medium.json` の `dry_run` を `false` に切り替え、medium actual run を `python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_operational.medium.json` で実行した
+- medium actual run は `run_id=20260325T072931Z_d858f57c`、`run_status=completed`、`total_rows=132`、`succeeded_rows=132`、`failed_rows=0` だった
+- medium の CSV は `var/evaluation_batch/medium_results.csv`、SQLite は `var/evaluation_batch/medium_results.sqlite3` で、ともに 132 row を保持し、run メタも `planned_rows=132`、`succeeded_rows=132`、`failed_rows=0` で一致した
+- medium run では 11 period すべてで 12 row ずつ生成され、artifact path は 11 個で period ごとに 1 個だった
+- medium run の result row では `fetched=True`、`reused_existing_artifact=False` が 132 row で記録され、既存 cache 再利用ではなく当該 run で period ごとに market data を取得したことを確認した
+- 同一 period 配下の 12 case は同一 artifact path を共有しており、period 単位で 1 回解決した market data を case 群へ再利用している
+- medium actual run では network 制約由来の failure は発生せず、通信先は `https://api.binance.com/api/v3/klines`、取得方式は公開 JSON の HTTP GET だった
+- medium actual run の開始から終了までは約 1.34 秒で、132 row 規模では current runner の実行感触は軽い
 
 ## Network Run Recording
 
@@ -123,6 +127,11 @@
   - 同じコマンドを `sandbox_permissions=require_escalated` 付きで再実行すると成功した
   - Codex から観測できたのは「通常 sandbox では失敗、escalated 実行では成功」までで、承認 UI の内訳は不明である
   - 現時点では即違反認定ではないが、次の external communication actual run 前に運用 fix を入れる必要がある
+  - medium actual run では `python3 scripts/run_evaluation_batch_from_inputs.py --config config/evaluation_batch_operational.medium.json` を `sandbox_permissions=require_escalated` で実行した
+  - medium actual run の config path は `config/evaluation_batch_operational.medium.json`、run_id は `20260325T072931Z_d858f57c`、通信先は `https://api.binance.com/api/v3/klines`、domain は `api.binance.com` である
+  - 取得方式は公開 JSON の HTTP GET で、Codex から確認できた承認事実は「escalated 実行としてコマンドが実行できた」までで、承認 UI の内訳は不明である
+  - 保存先は `var/evaluation_batch/medium_results.csv`、`var/evaluation_batch/medium_results.sqlite3`、`var/cache/market_data/ohlcv/...` の正規化済み OHLCV cache、`var/cache/market_data/shared_state.sqlite3` である
+  - raw body 保存は行っておらず、failure 分類は今回の medium actual run では該当なし、run status は `completed` である
 
 ## Scale Definition
 
@@ -208,10 +217,10 @@
 
 ## Next Candidate Tasks
 
-- medium actual run 可否の承認を取り、承認後は medium だけを先に実行する
+- medium actual run の結果を確認し、operational pilot full に進むかを判断する
 - current-stack planning / ceiling と original planning baseline / ceiling baseline のどこまでを今後 runnable 化するかを別タスクで判断する
 - 必要なら builder / manifest との限定的な接続を再評価する
 
 ## Next Approval Gate
 
-- ネットワーク運用 fix、scale 定義修正、parameter 件数根拠の整理を確認したうえで、medium actual run 可否の承認待ちに入る
+- medium actual run の結果確認後、operational pilot full に進むかを承認待ちにする

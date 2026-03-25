@@ -12,6 +12,6 @@
     "cache_root": "var/cache/market_data/ohlcv",
     "shared_state_db_path": "var/cache/market_data/shared_state.sqlite3",
     "case_chunk_size": 6,
-    "dry_run": true
+    "dry_run": false
   }
 }
